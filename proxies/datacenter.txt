@@ -1,0 +1,6 @@
+# Datacenter proxy pool
+# Format: host:port (one per line)
+dc1.proxy.example.com:3128
+dc2.proxy.example.com:3128
+dc3.proxy.example.com:3128
+dc4.proxy.example.com:3128

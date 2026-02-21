@@ -1,0 +1,23 @@
+# Proxy Rotator Configuration
+#
+# Usage: proxy-rotator [config.toml]
+#
+# Clients select a proxy set via Proxy-Authorization: Basic base64(set_name:)
+# No password is required.
+
+bind_addr = "127.0.0.1:8100"
+log_level = "info"
+
+# Example proxy set: residential proxies
+[[proxy_set]]
+name = "residential"
+proxies_file = "proxies/residential.txt"
+session_affinity_secs = 300       # same client IP → same proxy for 5 minutes
+# upstream_username = "user123"   # optional: sent to upstream proxies
+# upstream_password = "pass456"   # optional: sent to upstream proxies
+
+# Example proxy set: datacenter proxies
+[[proxy_set]]
+name = "datacenter"
+proxies_file = "proxies/datacenter.txt"
+session_affinity_secs = 0         # pure round-robin, no affinity

@@ -1,0 +1,8 @@
+target
+.git
+.github
+.pi
+.vscode
+proxies
+config.toml
+README.md

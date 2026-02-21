@@ -1,0 +1,5 @@
+# Residential proxy pool
+# Format: host:port (one per line)
+proxy1.residential.example.com:8080
+proxy2.residential.example.com:8080
+proxy3.residential.example.com:8080
