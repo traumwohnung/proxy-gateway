@@ -28,7 +28,7 @@ pub async fn run_proxy(bind_addr: &str, rotator: Arc<Rotator>) -> Result<()> {
             );
         }
     }
-    info!("Usage: Proxy-Authorization: Basic base64(proxy_set_name:)");
+    info!("Usage: Proxy-Authorization: Basic base64(proxy_set_name:) or base64(proxy_set_name-session_id:)");
 
     loop {
         let (stream, peer) = listener.accept().await?;
@@ -70,10 +70,17 @@ pub async fn run_proxy(bind_addr: &str, rotator: Arc<Rotator>) -> Result<()> {
 // Proxy-Authorization parsing
 // ---------------------------------------------------------------------------
 
+/// Parsed proxy authorization: proxy set name and optional session ID.
+struct ProxyAuth {
+    set_name: String,
+    session_id: Option<String>,
+}
+
 /// Parse the Proxy-Authorization header.
-/// Format: `Basic base64(proxy_set_name:)`
-/// The username is the proxy set name, password is unused (empty).
-fn parse_proxy_set_name(req: &Request<Incoming>) -> Option<String> {
+/// Format: `Basic base64(username:)`
+/// Username is either `proxy_set_name` or `proxy_set_name-session_id`.
+/// The session_id must be alphanumeric. Password is unused (empty).
+fn parse_proxy_auth(req: &Request<Incoming>) -> Option<ProxyAuth> {
     let header_val = req
         .headers()
         .get("proxy-authorization")
@@ -93,7 +100,26 @@ fn parse_proxy_set_name(req: &Request<Incoming>) -> Option<String> {
         return None;
     }
 
-    Some(username.to_string())
+    // Split on first '-' to separate set_name from session_id.
+    // Only treat the suffix as a session_id if it's non-empty and alphanumeric.
+    if let Some(dash_pos) = username.find('-') {
+        let set_part = &username[..dash_pos];
+        let session_part = &username[dash_pos + 1..];
+        if !set_part.is_empty()
+            && !session_part.is_empty()
+            && session_part.chars().all(|c| c.is_ascii_alphanumeric())
+        {
+            return Some(ProxyAuth {
+                set_name: set_part.to_string(),
+                session_id: Some(session_part.to_string()),
+            });
+        }
+    }
+
+    Some(ProxyAuth {
+        set_name: username.to_string(),
+        session_id: None,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -124,14 +150,14 @@ async fn handle_request_inner(
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>> {
     let client_ip = peer.ip();
 
-    // Parse the proxy set name from Proxy-Authorization.
-    let set_name = match parse_proxy_set_name(&req) {
-        Some(name) => name,
+    // Parse the proxy set name and optional session ID from Proxy-Authorization.
+    let (set_name, session_id) = match parse_proxy_auth(&req) {
+        Some(auth) => (auth.set_name, auth.session_id),
         None => {
             // If there's only one proxy set, use it as default.
             let names = rotator.set_names();
             if names.len() == 1 {
-                names[0].to_string()
+                (names[0].to_string(), None)
             } else {
                 warn!(
                     method = %req.method(),
@@ -146,8 +172,14 @@ async fn handle_request_inner(
         }
     };
 
+    // Session key: use session_id if provided, otherwise fall back to client IP.
+    let session_key = session_id
+        .as_deref()
+        .unwrap_or(&client_ip.to_string())
+        .to_string();
+
     // Resolve the next upstream proxy.
-    let upstream = match rotator.next_proxy(&set_name, client_ip) {
+    let upstream = match rotator.next_proxy(&set_name, &session_key) {
         Some(p) => p,
         None => {
             warn!(
@@ -171,6 +203,7 @@ async fn handle_request_inner(
         method = %req.method(),
         uri = %req.uri(),
         set = %set_name,
+        session = session_id.as_deref().unwrap_or("-"),
         upstream = %format!("{}:{}", upstream.host, upstream.port),
         client = %client_ip,
         "Routing request"

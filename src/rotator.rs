@@ -1,7 +1,6 @@
 use crate::config::{ProxySet, UpstreamProxy};
 
 use dashmap::DashMap;
-use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -26,7 +25,8 @@ struct ProxyEntry {
 
 struct AffinityTable {
     duration: Duration,
-    map: DashMap<IpAddr, AffinityEntry>,
+    /// Keyed by session key: either the client IP (default) or a client-provided session ID.
+    map: DashMap<String, AffinityEntry>,
 }
 
 struct AffinityEntry {
@@ -78,10 +78,14 @@ impl Rotator {
     /// Find a proxy set by name and return the next proxy.
     /// Uses least-used selection with random tie-breaking.
     /// Credentials come from the proxy entry itself.
-    /// `client_ip` is used for session affinity if configured.
-    pub fn next_proxy(&self, set_name: &str, client_ip: IpAddr) -> Option<ResolvedProxy> {
+    /// `session_key` identifies the session for affinity (defaults to client IP).
+    pub fn next_proxy(
+        &self,
+        set_name: &str,
+        session_key: &str,
+    ) -> Option<ResolvedProxy> {
         let set = self.sets.iter().find(|s| s.name == set_name)?;
-        let proxy = set.pick(client_ip);
+        let proxy = set.pick(session_key);
         Some(ResolvedProxy {
             host: proxy.host.clone(),
             port: proxy.port,
@@ -109,10 +113,10 @@ impl Rotator {
 }
 
 impl RotatorSet {
-    fn pick(&self, client_ip: IpAddr) -> &UpstreamProxy {
+    fn pick(&self, session_key: &str) -> &UpstreamProxy {
         if let Some(affinity) = &self.affinity {
             // Check for a valid affinity entry.
-            if let Some(entry) = affinity.map.get(&client_ip) {
+            if let Some(entry) = affinity.map.get(session_key) {
                 if entry.assigned_at.elapsed() < affinity.duration {
                     let idx = entry.proxy_index;
                     self.proxies[idx].use_count.fetch_add(1, Ordering::Relaxed);
@@ -123,7 +127,7 @@ impl RotatorSet {
             // Assign via least-used selection.
             let idx = self.pick_least_used();
             affinity.map.insert(
-                client_ip,
+                session_key.to_string(),
                 AffinityEntry {
                     proxy_index: idx,
                     assigned_at: Instant::now(),
@@ -244,11 +248,10 @@ mod tests {
     #[test]
     fn test_least_used_distributes_evenly() {
         let rotator = Rotator::new(vec![make_test_set(4, 0)]);
-        let ip: IpAddr = "127.0.0.1".parse().unwrap();
 
         let mut counts: HashMap<String, usize> = HashMap::new();
         for _ in 0..400 {
-            let p = rotator.next_proxy("test", ip).unwrap();
+            let p = rotator.next_proxy("test", "127.0.0.1").unwrap();
             *counts.entry(p.host.clone()).or_default() += 1;
         }
 
@@ -264,32 +267,46 @@ mod tests {
     #[test]
     fn test_credentials_from_proxy_entry() {
         let rotator = Rotator::new(vec![make_test_set(1, 0)]);
-        let ip: IpAddr = "127.0.0.1".parse().unwrap();
-        let p = rotator.next_proxy("test", ip).unwrap();
+        let p = rotator.next_proxy("test", "127.0.0.1").unwrap();
         assert_eq!(p.username.as_deref(), Some("testuser"));
         assert_eq!(p.password.as_deref(), Some("testpass"));
     }
 
     #[test]
-    fn test_session_affinity() {
+    fn test_session_affinity_by_ip() {
         let rotator = Rotator::new(vec![make_test_set(4, 300)]);
 
-        let ip1: IpAddr = "10.0.0.1".parse().unwrap();
-        let ip2: IpAddr = "10.0.0.2".parse().unwrap();
+        // Same session key → same proxy
+        let p1a = rotator.next_proxy("test", "10.0.0.1").unwrap();
+        let p1b = rotator.next_proxy("test", "10.0.0.1").unwrap();
+        assert_eq!(p1a.host, p1b.host, "Same session key should get same proxy");
 
-        let p1a = rotator.next_proxy("test", ip1).unwrap();
-        let p1b = rotator.next_proxy("test", ip1).unwrap();
-        assert_eq!(p1a.host, p1b.host, "Same IP should get same proxy");
-
-        let p2 = rotator.next_proxy("test", ip2).unwrap();
+        // Different session key → may get a different proxy
+        let p2 = rotator.next_proxy("test", "10.0.0.2").unwrap();
         assert!(p2.host.starts_with("proxy"));
+    }
+
+    #[test]
+    fn test_session_affinity_with_session_ids() {
+        let rotator = Rotator::new(vec![make_test_set(4, 300)]);
+
+        // Different session IDs get independent affinity
+        let pa1 = rotator.next_proxy("test", "sess1").unwrap();
+        let pa2 = rotator.next_proxy("test", "sess1").unwrap();
+        assert_eq!(pa1.host, pa2.host, "Same session should get same proxy");
+
+        let pb1 = rotator.next_proxy("test", "sess2").unwrap();
+        let pb2 = rotator.next_proxy("test", "sess2").unwrap();
+        assert_eq!(pb1.host, pb2.host, "Same session should get same proxy");
+
+        assert!(pa1.host.starts_with("proxy"));
+        assert!(pb1.host.starts_with("proxy"));
     }
 
     #[test]
     fn test_unknown_set_returns_none() {
         let rotator = Rotator::new(vec![make_test_set(2, 0)]);
-        let ip: IpAddr = "127.0.0.1".parse().unwrap();
-        assert!(rotator.next_proxy("nonexistent", ip).is_none());
+        assert!(rotator.next_proxy("nonexistent", "127.0.0.1").is_none());
     }
 
     #[test]

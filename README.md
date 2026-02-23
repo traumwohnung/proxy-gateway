@@ -11,7 +11,7 @@ Client ──HTTP/CONNECT──→ proxy-rotator ──→ upstream proxy pool �
 - **No TLS termination** — raw bytes are relayed through CONNECT tunnels. The client's own TLS handshake reaches the destination untouched.
 - Multiple **proxy sets** — each with its own pool of upstream proxies and rotation strategy.
 - **Least-used rotation** — requests go to the proxy with the lowest use count, with random tie-breaking among equally-used proxies.
-- **Session affinity** — optionally pin a client IP to the same upstream proxy for a configurable duration.
+- **Session affinity** — optionally pin a client IP (+ optional session ID) to the same upstream proxy for a configurable duration.
 - **Per-proxy credentials** — each proxy entry includes its own username:password.
 
 ## Configuration
@@ -59,7 +59,7 @@ cargo build --release
 
 ### Client usage
 
-Clients select a proxy set via the `Proxy-Authorization` header. The **username** is the proxy set name, and the **password** is empty (unused):
+Clients select a proxy set via the `Proxy-Authorization` header. The **username** is the proxy set name, optionally followed by `-session_id` (alphanumeric) for session control. The **password** is empty (unused):
 
 ```bash
 # Use the "residential" proxy set
@@ -70,6 +70,16 @@ curl -x http://127.0.0.1:8100 \
 # Use the "datacenter" proxy set
 curl -x http://127.0.0.1:8100 \
   --proxy-user "datacenter:" \
+  https://httpbin.org/ip
+
+# Use a specific session (same session ID → same upstream proxy for the affinity window)
+curl -x http://127.0.0.1:8100 \
+  --proxy-user "residential-abc123:" \
+  https://httpbin.org/ip
+
+# Different session ID → independent upstream proxy selection
+curl -x http://127.0.0.1:8100 \
+  --proxy-user "residential-xyz789:" \
   https://httpbin.org/ip
 
 # If only one proxy set is configured, auth can be omitted
@@ -85,7 +95,7 @@ curl -x http://127.0.0.1:8100 https://httpbin.org/ip
 ## How It Works
 
 1. Client connects and sends an HTTP request or CONNECT tunnel request
-2. The proxy set is selected from `Proxy-Authorization: Basic base64(set_name:)`
+2. The proxy set (and optional session ID) is parsed from `Proxy-Authorization: Basic base64(set_name-session_id:)`
 3. An upstream proxy is chosen using **least-used rotation** (lowest use count, random tie-breaking)
 4. Credentials from the proxy entry (`host:port:user:pass`) are forwarded to the upstream proxy
 5. For **CONNECT**: a tunnel is established through the upstream proxy, then raw bytes are relayed bidirectionally — no TLS breaking
@@ -102,7 +112,7 @@ This ensures even distribution while avoiding predictable patterns.
 
 ### Session affinity
 
-When `session_affinity_secs > 0`, the first request from a client IP gets assigned an upstream proxy via least-used selection. Subsequent requests from the same IP reuse that proxy until the affinity window expires. Expired entries are cleaned up every 60 seconds.
+When `session_affinity_secs > 0`, the first request from a client IP (+ session ID, if provided) gets assigned an upstream proxy via least-used selection. Subsequent requests with the same IP and session ID reuse that proxy until the affinity window expires. Different session IDs from the same client get independent upstream proxy assignments, allowing one client to maintain multiple concurrent sessions through different proxies. Expired entries are cleaned up every 60 seconds.
 
 ## Docker
 

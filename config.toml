@@ -1,21 +1,20 @@
-# Proxy Rotator Configuration
+# Proxy Rotator — Local Development Configuration
 #
-# Usage: proxy-rotator [config.toml]
+# Usage: cargo run
 #
 # Clients select a proxy set via Proxy-Authorization: Basic base64(set_name:)
+# Optional session ID: base64(set_name-session_id:)
 # No password is required.
 
 bind_addr = "127.0.0.1:8100"
 log_level = "info"
 
-# Example proxy set: residential proxies
 [[proxy_set]]
 name = "residential"
-proxies_file = "proxies/residential.txt"
-session_affinity_secs = 300       # same client IP → same proxy for 5 minutes
+proxies_file = "deployment/config/residential.txt"
+session_affinity_secs = 300
 
-# Example proxy set: datacenter proxies
 [[proxy_set]]
 name = "datacenter"
-proxies_file = "proxies/datacenter.txt"
-session_affinity_secs = 0         # pure least-used rotation
+proxies_file = "deployment/config/datacenter.txt"
+session_affinity_secs = 0
