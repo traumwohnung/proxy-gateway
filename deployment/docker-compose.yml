@@ -8,8 +8,7 @@ services:
     ports:
       - "8100:8100"
     volumes:
-      - ./config.toml:/data/config/config.toml:ro
-      - ./proxies:/data/config/proxies:ro
+      - ./config:/data/config:ro
     environment:
       - RUST_LOG=info
     restart: unless-stopped

@@ -9,10 +9,10 @@ log_level = "info"
 
 [[proxy_set]]
 name = "residential"
-proxies_file = "/data/config/proxies/residential.txt"
+proxies_file = "residential.txt"
 session_affinity_secs = 300
 
 [[proxy_set]]
 name = "datacenter"
-proxies_file = "/data/config/proxies/datacenter.txt"
+proxies_file = "datacenter.txt"
 session_affinity_secs = 0
