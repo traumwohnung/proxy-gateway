@@ -27,7 +27,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GitHub Container Registry
-        if: github.event_name != 'pull_request'
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -40,7 +40,6 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=ref,event=branch
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
@@ -51,12 +50,9 @@ jobs:
         with:
           context: .
           file: proxy-rotator/Dockerfile
-          push: ${{ github.event_name != 'pull_request' }}
+          push: ${{ startsWith(github.ref, 'refs/tags/v') }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # GHA cache for Docker layers. The Dockerfile is structured so that
-          # dependency compilation (stage 1) is a separate layer keyed only on
-          # Cargo.toml + Cargo.lock. Source-only changes skip dep compilation.
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64,linux/arm64
