@@ -1,0 +1,17 @@
+{
+    "name": "@1cedsoda/proxy-rotator-client",
+    "version": "0.7.0",
+    "type": "module",
+    "exports": {
+        ".": "./src/index.ts"
+    },
+    "publishConfig": {
+        "registry": "https://npm.pkg.github.com"
+    },
+    "dependencies": {
+        "zod": "^3.0.0"
+    },
+    "devDependencies": {
+        "@types/node": "^22"
+    }
+}

@@ -37,8 +37,16 @@ struct AffinityEntry {
     /// Monotonically-incrementing identifier assigned at session creation.
     session_id: u64,
     proxy_index: usize,
-    assigned_at: Instant,
-    assigned_at_wall: SystemTime,
+    /// Monotonic instant when the session was created — used for TTL expiry checks.
+    started_at: Instant,
+    /// Pre-formatted ISO 8601 UTC string of the session creation time. Never changes.
+    created_at: String,
+    /// Wall time when the current proxy assignment expires — exposed as `next_rotation_at`.
+    /// Reset to `now + duration` on every `force_rotate`.
+    next_rotation_at: SystemTime,
+    /// Wall time of the most recent proxy assignment. Equals creation time initially;
+    /// updated to `SystemTime::now()` on every `force_rotate`.
+    last_rotation_at: SystemTime,
     duration: Duration,
     /// The decoded, validated metadata object from the base64-JSON username segment.
     metadata: serde_json::Map<String, serde_json::Value>,
@@ -68,12 +76,15 @@ pub struct SessionInfo {
     /// The upstream proxy address (host:port).
     #[schema(example = "198.51.100.1:6658")]
     pub upstream: String,
-    /// Session start time (ISO 8601 UTC).
+    /// Session start time — when the session was first created (ISO 8601 UTC). Never changes.
     #[schema(example = "2026-02-23T21:00:00Z")]
-    pub start_date: String,
-    /// Session end time (ISO 8601 UTC).
-    #[schema(example = "2026-02-23T21:05:00Z")]
-    pub end_date: String,
+    pub created_at: String,
+    /// When the current proxy assignment expires (ISO 8601 UTC). Reset on force_rotate.
+    #[schema(example = "2026-02-23T22:00:00Z")]
+    pub next_rotation_at: String,
+    /// When the proxy was last assigned — equals created_at unless force_rotate was called (ISO 8601 UTC).
+    #[schema(example = "2026-02-23T21:00:00Z")]
+    pub last_rotation_at: String,
     /// The decoded metadata object from the base64-JSON username segment.
     pub metadata: serde_json::Map<String, serde_json::Value>,
 }
@@ -160,6 +171,41 @@ impl Rotator {
         })
     }
 
+    /// Force-rotate the upstream proxy for an existing session.
+    ///
+    /// Picks a new upstream via least-used selection and resets the session's
+    /// start/end times to now + original duration. The session_id, metadata,
+    /// and duration are preserved. Returns the updated SessionInfo, or None if
+    /// no active session exists for the given username.
+    pub fn force_rotate(&self, username: &str) -> Option<SessionInfo> {
+        for set in &self.sets {
+            if let Some(mut entry) = set.affinity_map.get_mut(username) {
+                if entry.started_at.elapsed() >= entry.duration {
+                    return None; // expired — treat as not found
+                }
+                let new_idx = set.pick_least_used();
+                let now = SystemTime::now();
+                entry.proxy_index = new_idx;
+                entry.last_rotation_at = now;
+                entry.next_rotation_at = now + entry.duration;
+
+                let proxy = &set.proxies[new_idx].proxy;
+
+                return Some(SessionInfo {
+                    session_id: entry.session_id,
+                    username: username.to_string(),
+                    proxy_set: set.name.clone(),
+                    upstream: format!("{}:{}", proxy.host, proxy.port),
+                    created_at: entry.created_at.clone(),
+                    next_rotation_at: format_system_time(entry.next_rotation_at),
+                    last_rotation_at: format_system_time(entry.last_rotation_at),
+                    metadata: entry.metadata.clone(),
+                });
+            }
+        }
+        None
+    }
+
     /// Pick a proxy from a named set without creating an affinity entry.
     /// Used for pre-flight verification checks.
     pub fn pick_any(&self, set_name: &str) -> Option<ResolvedProxy> {
@@ -199,19 +245,19 @@ impl Rotator {
         // We search all sets for a matching entry.
         for set in &self.sets {
             if let Some(entry) = set.affinity_map.get(username) {
-                if entry.assigned_at.elapsed() >= entry.duration {
+                if entry.started_at.elapsed() >= entry.duration {
                     return None;
                 }
                 let proxy = &set.proxies[entry.proxy_index].proxy;
-                let start = entry.assigned_at_wall;
-                let end = start + entry.duration;
+
                 return Some(SessionInfo {
                     session_id: entry.session_id,
                     username: username.to_string(),
                     proxy_set: set.name.clone(),
                     upstream: format!("{}:{}", proxy.host, proxy.port),
-                    start_date: format_system_time(start),
-                    end_date: format_system_time(end),
+                    created_at: entry.created_at.clone(),
+                    next_rotation_at: format_system_time(entry.next_rotation_at),
+                    last_rotation_at: format_system_time(entry.last_rotation_at),
                     metadata: entry.metadata.clone(),
                 });
             }
@@ -228,7 +274,7 @@ impl Rotator {
                 let entry = entry_ref.value();
 
                 // Skip expired entries.
-                if entry.assigned_at.elapsed() >= entry.duration {
+                if entry.started_at.elapsed() >= entry.duration {
                     continue;
                 }
 
@@ -236,16 +282,15 @@ impl Rotator {
                 let username = affinity_key.clone();
 
                 let proxy = &set.proxies[entry.proxy_index].proxy;
-                let start = entry.assigned_at_wall;
-                let end = start + entry.duration;
 
                 sessions.push(SessionInfo {
                     session_id: entry.session_id,
                     username,
                     proxy_set: set.name.clone(),
                     upstream: format!("{}:{}", proxy.host, proxy.port),
-                    start_date: format_system_time(start),
-                    end_date: format_system_time(end),
+                    created_at: entry.created_at.clone(),
+                    next_rotation_at: format_system_time(entry.next_rotation_at),
+                    last_rotation_at: format_system_time(entry.last_rotation_at),
                     metadata: entry.metadata.clone(),
                 });
             }
@@ -277,7 +322,7 @@ impl RotatorSet {
 
         // Check for a valid existing affinity entry.
         if let Some(entry) = self.affinity_map.get(username_b64) {
-            if entry.assigned_at.elapsed() < entry.duration {
+            if entry.started_at.elapsed() < entry.duration {
                 let idx = entry.proxy_index;
                 self.proxies[idx].use_count.fetch_add(1, Ordering::Relaxed);
                 return &self.proxies[idx].proxy;
@@ -287,13 +332,16 @@ impl RotatorSet {
         // Assign via least-used selection and allocate a new session ID.
         let idx = self.pick_least_used();
         let session_id = id_counter.fetch_add(1, Ordering::Relaxed);
+        let now_wall = SystemTime::now();
         self.affinity_map.insert(
             username_b64.to_string(),
             AffinityEntry {
                 session_id,
                 proxy_index: idx,
-                assigned_at: Instant::now(),
-                assigned_at_wall: SystemTime::now(),
+                started_at: Instant::now(),
+                created_at: format_system_time(now_wall),
+                next_rotation_at: now_wall + duration,
+                last_rotation_at: now_wall,
                 duration,
                 metadata,
             },
@@ -333,9 +381,7 @@ impl RotatorSet {
 
 /// Format a SystemTime as ISO 8601 (UTC) without external crate.
 fn format_system_time(t: SystemTime) -> String {
-    let dur = t
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
+    let dur = t.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default();
     let secs = dur.as_secs();
 
     // Manual UTC breakdown.
@@ -405,7 +451,7 @@ pub fn spawn_affinity_cleanup(rotator: Arc<Rotator>) {
             for set in &rotator.sets {
                 let before = set.affinity_map.len();
                 set.affinity_map
-                    .retain(|_, entry| entry.assigned_at.elapsed() < entry.duration);
+                    .retain(|_, entry| entry.started_at.elapsed() < entry.duration);
                 let removed = before - set.affinity_map.len();
                 if removed > 0 {
                     tracing::debug!(
@@ -500,12 +546,18 @@ mod tests {
         let rotator = Rotator::new(vec![make_test_set(4)]);
         let b64 = make_username_b64("test", 5, &[("session", "sess1")]);
 
-        let p1a = rotator.next_proxy("test", 5, &b64, empty_metadata()).unwrap();
-        let p1b = rotator.next_proxy("test", 5, &b64, empty_metadata()).unwrap();
+        let p1a = rotator
+            .next_proxy("test", 5, &b64, empty_metadata())
+            .unwrap();
+        let p1b = rotator
+            .next_proxy("test", 5, &b64, empty_metadata())
+            .unwrap();
         assert_eq!(p1a.host, p1b.host, "Same session key should get same proxy");
 
         let b64_2 = make_username_b64("test", 5, &[("session", "sess2")]);
-        let p2 = rotator.next_proxy("test", 5, &b64_2, empty_metadata()).unwrap();
+        let p2 = rotator
+            .next_proxy("test", 5, &b64_2, empty_metadata())
+            .unwrap();
         assert!(p2.host.starts_with("proxy"));
     }
 
@@ -516,12 +568,18 @@ mod tests {
 
         let mut hosts = Vec::new();
         for _ in 0..4 {
-            let p = rotator.next_proxy("test", 0, &b64, empty_metadata()).unwrap();
+            let p = rotator
+                .next_proxy("test", 0, &b64, empty_metadata())
+                .unwrap();
             hosts.push(p.host);
         }
         hosts.sort();
         hosts.dedup();
-        assert_eq!(hosts.len(), 4, "0 minutes should distribute across all proxies");
+        assert_eq!(
+            hosts.len(),
+            4,
+            "0 minutes should distribute across all proxies"
+        );
     }
 
     #[test]
@@ -530,12 +588,20 @@ mod tests {
         let b64_a = make_username_b64("test", 10, &[("session", "sessA")]);
         let b64_b = make_username_b64("test", 10, &[("session", "sessB")]);
 
-        let pa1 = rotator.next_proxy("test", 10, &b64_a, empty_metadata()).unwrap();
-        let pa2 = rotator.next_proxy("test", 10, &b64_a, empty_metadata()).unwrap();
+        let pa1 = rotator
+            .next_proxy("test", 10, &b64_a, empty_metadata())
+            .unwrap();
+        let pa2 = rotator
+            .next_proxy("test", 10, &b64_a, empty_metadata())
+            .unwrap();
         assert_eq!(pa1.host, pa2.host, "Same session should get same proxy");
 
-        let pb1 = rotator.next_proxy("test", 10, &b64_b, empty_metadata()).unwrap();
-        let pb2 = rotator.next_proxy("test", 10, &b64_b, empty_metadata()).unwrap();
+        let pb1 = rotator
+            .next_proxy("test", 10, &b64_b, empty_metadata())
+            .unwrap();
+        let pb2 = rotator
+            .next_proxy("test", 10, &b64_b, empty_metadata())
+            .unwrap();
         assert_eq!(pb1.host, pb2.host, "Same session should get same proxy");
     }
 
@@ -543,7 +609,9 @@ mod tests {
     fn test_unknown_set_returns_none() {
         let rotator = Rotator::new(vec![make_test_set(2)]);
         let b64 = make_username_b64("nonexistent", 0, &[("k", "v")]);
-        assert!(rotator.next_proxy("nonexistent", 0, &b64, empty_metadata()).is_none());
+        assert!(rotator
+            .next_proxy("nonexistent", 0, &b64, empty_metadata())
+            .is_none());
     }
 
     #[test]
@@ -566,15 +634,17 @@ mod tests {
         let rotator = Rotator::new(vec![make_test_set(4)]);
         let b64 = make_username_b64("test", 5, &[("session", "mysess")]);
 
-        let p = rotator.next_proxy("test", 5, &b64, empty_metadata()).unwrap();
+        let p = rotator
+            .next_proxy("test", 5, &b64, empty_metadata())
+            .unwrap();
 
         // get_session uses the username_b64 directly as the key.
         let info = rotator.get_session(&b64).unwrap();
         assert_eq!(info.proxy_set, "test");
         assert_eq!(info.username, b64);
         assert_eq!(info.upstream, format!("{}:{}", p.host, p.port));
-        assert!(!info.start_date.is_empty());
-        assert!(!info.end_date.is_empty());
+        assert!(!info.created_at.is_empty());
+        assert!(!info.next_rotation_at.is_empty());
     }
 
     #[test]
@@ -582,7 +652,9 @@ mod tests {
         let rotator = Rotator::new(vec![make_test_set(4)]);
         let b64 = make_username_b64("test", 0, &[("session", "nosess")]);
 
-        rotator.next_proxy("test", 0, &b64, empty_metadata()).unwrap();
+        rotator
+            .next_proxy("test", 0, &b64, empty_metadata())
+            .unwrap();
         assert!(rotator.get_session(&b64).is_none());
     }
 
@@ -600,9 +672,15 @@ mod tests {
         let b64_b = make_username_b64("test", 10, &[("session", "sessB")]);
         let b64_noaff = make_username_b64("test", 0, &[("session", "noaff")]);
 
-        rotator.next_proxy("test", 5, &b64_a, empty_metadata()).unwrap();
-        rotator.next_proxy("test", 10, &b64_b, empty_metadata()).unwrap();
-        rotator.next_proxy("test", 0, &b64_noaff, empty_metadata()).unwrap(); // won't appear
+        rotator
+            .next_proxy("test", 5, &b64_a, empty_metadata())
+            .unwrap();
+        rotator
+            .next_proxy("test", 10, &b64_b, empty_metadata())
+            .unwrap();
+        rotator
+            .next_proxy("test", 0, &b64_noaff, empty_metadata())
+            .unwrap(); // won't appear
 
         let sessions = rotator.list_sessions();
         assert_eq!(sessions.len(), 2);
@@ -619,9 +697,15 @@ mod tests {
         let b64_b = make_username_b64("test", 5, &[("session", "b")]);
         let b64_c = make_username_b64("test", 5, &[("session", "c")]);
 
-        rotator.next_proxy("test", 5, &b64_a, empty_metadata()).unwrap();
-        rotator.next_proxy("test", 5, &b64_b, empty_metadata()).unwrap();
-        rotator.next_proxy("test", 5, &b64_c, empty_metadata()).unwrap();
+        rotator
+            .next_proxy("test", 5, &b64_a, empty_metadata())
+            .unwrap();
+        rotator
+            .next_proxy("test", 5, &b64_b, empty_metadata())
+            .unwrap();
+        rotator
+            .next_proxy("test", 5, &b64_c, empty_metadata())
+            .unwrap();
 
         let mut sessions = rotator.list_sessions();
         sessions.sort_by_key(|s| s.session_id);
@@ -640,9 +724,15 @@ mod tests {
         let b64_b = make_username_b64("test", 5, &[("session", "b")]);
         let b64_c = make_username_b64("test", 5, &[("session", "c")]);
 
-        rotator.next_proxy("test", 5, &b64_a, empty_metadata()).unwrap();
-        rotator.next_proxy("test", 5, &b64_b, empty_metadata()).unwrap();
-        rotator.next_proxy("test", 5, &b64_c, empty_metadata()).unwrap();
+        rotator
+            .next_proxy("test", 5, &b64_a, empty_metadata())
+            .unwrap();
+        rotator
+            .next_proxy("test", 5, &b64_b, empty_metadata())
+            .unwrap();
+        rotator
+            .next_proxy("test", 5, &b64_c, empty_metadata())
+            .unwrap();
 
         let mut sessions = rotator.list_sessions();
         sessions.sort_by_key(|s| s.session_id);
@@ -650,6 +740,82 @@ mod tests {
         assert_eq!(sessions[0].session_id, 0);
         assert_eq!(sessions[1].session_id, 1);
         assert_eq!(sessions[2].session_id, 2);
+    }
+
+    #[test]
+    fn test_force_rotate_changes_upstream() {
+        // With 4 proxies and one session, force_rotate must pick a different proxy
+        // at least sometimes. Run it multiple times to confirm it can change.
+        let rotator = Rotator::new(vec![make_test_set(4)]);
+        let b64 = make_username_b64("test", 60, &[("session", "rot")]);
+
+        let original = rotator
+            .next_proxy("test", 60, &b64, empty_metadata())
+            .unwrap();
+
+        // Force-rotate until we get a different proxy (or give up after 20 tries).
+        let mut rotated_upstream = original.host.clone();
+        for _ in 0..20 {
+            let info = rotator.force_rotate(&b64).unwrap();
+            rotated_upstream = info.upstream.split(':').next().unwrap().to_string();
+            if rotated_upstream != original.host {
+                break;
+            }
+        }
+        // The rotator has 4 proxies; it's overwhelmingly likely we get a new one.
+        assert_ne!(
+            rotated_upstream, original.host,
+            "force_rotate should assign a different upstream"
+        );
+    }
+
+    #[test]
+    fn test_force_rotate_preserves_session_id_and_metadata() {
+        let rotator = Rotator::new(vec![make_test_set(4)]);
+        let b64 = make_username_b64("test", 60, &[("session", "preserve")]);
+
+        rotator
+            .next_proxy("test", 60, &b64, empty_metadata())
+            .unwrap();
+        let before = rotator.get_session(&b64).unwrap();
+
+        rotator.force_rotate(&b64).unwrap();
+        let after = rotator.get_session(&b64).unwrap();
+
+        assert_eq!(
+            before.session_id, after.session_id,
+            "session_id must be preserved"
+        );
+        assert_eq!(before.proxy_set, after.proxy_set);
+        assert_eq!(before.username, after.username);
+    }
+
+    #[test]
+    fn test_force_rotate_resets_ttl() {
+        let rotator = Rotator::new(vec![make_test_set(4)]);
+        let b64 = make_username_b64("test", 60, &[("session", "ttl")]);
+
+        rotator
+            .next_proxy("test", 60, &b64, empty_metadata())
+            .unwrap();
+        let before = rotator.get_session(&b64).unwrap();
+
+        // Small sleep to ensure wall time advances
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        rotator.force_rotate(&b64).unwrap();
+        let after = rotator.get_session(&b64).unwrap();
+
+        assert!(
+            after.next_rotation_at >= before.next_rotation_at,
+            "next_rotation_at should not move backwards"
+        );
+    }
+
+    #[test]
+    fn test_force_rotate_unknown_returns_none() {
+        let rotator = Rotator::new(vec![make_test_set(4)]);
+        assert!(rotator.force_rotate("nosuchkey").is_none());
     }
 
     #[test]

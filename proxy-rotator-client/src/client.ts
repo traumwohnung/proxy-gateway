@@ -1,0 +1,103 @@
+import type { SessionInfo, VerifyResult } from "./types";
+
+export interface ProxyRotatorClientOptions {
+    /** Base URL of the proxy-rotator, e.g. "http://proxy-rotator:8100" */
+    baseUrl: string;
+    /** Static API key for authentication (Bearer token) */
+    apiKey?: string;
+    /** Getter for auth token. Called on every request. Takes precedence over apiKey. */
+    getToken?: () => string | null;
+    /** Request timeout in ms (default: 10000) */
+    timeout?: number;
+}
+
+export class ProxyRotatorClient {
+    private baseUrl: string;
+    private getToken: () => string | null;
+    private timeout: number;
+
+    constructor(opts: ProxyRotatorClientOptions) {
+        this.baseUrl = opts.baseUrl.replace(/\/$/, "");
+        this.getToken = opts.getToken ?? (opts.apiKey ? () => opts.apiKey! : () => null);
+        this.timeout = opts.timeout ?? 10_000;
+    }
+
+    private async fetch<T>(path: string, opts?: { method?: string }): Promise<T> {
+        const url = `${this.baseUrl}${path}`;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), this.timeout);
+
+        const headers: Record<string, string> = {};
+        const token = this.getToken();
+        if (token) {
+            headers.Authorization = `Bearer ${token}`;
+        }
+
+        try {
+            const res = await fetch(url, {
+                method: opts?.method ?? "GET",
+                signal: controller.signal,
+                headers,
+            });
+            if (!res.ok) {
+                const body = await res.text().catch(() => "");
+                throw new Error(`proxy-rotator ${res.status}: ${body}`);
+            }
+            return (await res.json()) as T;
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    /**
+     * Verify a proxy username before a session is created.
+     * Checks that the username is parseable, the proxy set exists, and the
+     * upstream proxy is reachable and returns a valid outbound IP.
+     * Does not create any affinity entry.
+     */
+    async verifyUsername(username: string): Promise<VerifyResult> {
+        return this.fetch<VerifyResult>(`/api/verify/${encodeURIComponent(username)}`);
+    }
+
+    /**
+     * Force-rotate the upstream proxy for an existing session.
+     *
+     * Immediately reassigns the upstream proxy via least-used selection and
+     * resets the session TTL. The session ID, metadata, and duration are
+     * preserved. Use this to escape a bad or slow proxy without losing session
+     * continuity.
+     *
+     * Returns null if no active session exists for this username.
+     */
+    async forceRotate(username: string): Promise<SessionInfo | null> {
+        try {
+            return await this.fetch<SessionInfo>(`/api/sessions/${encodeURIComponent(username)}/rotate`, {
+                method: "POST",
+            });
+        } catch (err) {
+            if (err instanceof Error && err.message.includes("404")) return null;
+            throw err;
+        }
+    }
+
+    /**
+     * List all active sticky sessions across all proxy sets.
+     * Sessions with 0 minutes (no affinity) are not tracked.
+     */
+    async listSessions(): Promise<SessionInfo[]> {
+        return this.fetch<SessionInfo[]>("/api/sessions");
+    }
+
+    /**
+     * Get a specific active session by its username.
+     * Returns null if no active session exists for that username.
+     */
+    async getSession(username: string): Promise<SessionInfo | null> {
+        try {
+            return await this.fetch<SessionInfo>(`/api/sessions/${encodeURIComponent(username)}`);
+        } catch (err) {
+            if (err instanceof Error && err.message.includes("404")) return null;
+            throw err;
+        }
+    }
+}

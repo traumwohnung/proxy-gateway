@@ -6,3 +6,4 @@ target
 proxies
 config.toml
 README.md
+proxy-rotator-client

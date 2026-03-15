@@ -1,1 +1,12 @@
-/target
+# Rust
+target/
+
+# Node / Bun
+node_modules/
+dist/
+*.tsbuildinfo
+bun.lockb
+
+# Local config
+config.toml
+proxies/

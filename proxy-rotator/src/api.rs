@@ -71,6 +71,46 @@ pub fn get_session(rotator: &Rotator, username: &str) -> Response<BoxBody<Bytes,
     }
 }
 
+/// Force-rotate a session's upstream proxy
+///
+/// Immediately reassigns the upstream proxy for an existing session via
+/// least-used selection and resets the session TTL. The session ID, metadata,
+/// and affinity duration are preserved. Use this to escape a bad or slow proxy
+/// without losing session continuity.
+#[utoipa::path(
+    post,
+    path = "/api/sessions/{username}/rotate",
+    params(
+        ("username" = String, Path, description = "Percent-encoded base64 username of the session to rotate"),
+    ),
+    responses(
+        (status = 200, description = "Session rotated — returns updated session info", body = SessionInfo),
+        (status = 401, description = "Invalid or missing API key", body = ApiError),
+        (status = 404, description = "No active session for this username", body = ApiError),
+    ),
+    security(
+        ("bearer" = [])
+    )
+)]
+pub fn force_rotate(rotator: &Rotator, username: &str) -> Response<BoxBody<Bytes, hyper::Error>> {
+    if username.is_empty() {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            r#"{"error":"Username is required"}"#,
+        );
+    }
+    match rotator.force_rotate(username) {
+        Some(info) => {
+            let json = serde_json::to_string(&info).unwrap_or_else(|_| "{}".to_string());
+            json_response(StatusCode::OK, &json)
+        }
+        None => json_response(
+            StatusCode::NOT_FOUND,
+            &format!(r#"{{"error":"No active session for '{}'"}}  "#, username),
+        ),
+    }
+}
+
 /// Verify a proxy username
 ///
 /// Parses the username, checks the proxy set exists, picks an upstream proxy,
@@ -111,10 +151,7 @@ pub async fn verify_username(
                 ip: String::new(),
                 error: Some(format!("Invalid username: {e}")),
             };
-            return json_response(
-                StatusCode::OK,
-                &serde_json::to_string(&result).unwrap(),
-            );
+            return json_response(StatusCode::OK, &serde_json::to_string(&result).unwrap());
         }
     };
 
@@ -135,10 +172,7 @@ pub async fn verify_username(
                     rotator.set_names()
                 )),
             };
-            return json_response(
-                StatusCode::OK,
-                &serde_json::to_string(&result).unwrap(),
-            );
+            return json_response(StatusCode::OK, &serde_json::to_string(&result).unwrap());
         }
     };
 
@@ -195,7 +229,9 @@ async fn fetch_ip_through_proxy(
         .position(|w| w == sep)
         .map(|p| p + sep.len())
         .unwrap_or(raw.len());
-    let ip = String::from_utf8_lossy(&raw[body_start..]).trim().to_string();
+    let ip = String::from_utf8_lossy(&raw[body_start..])
+        .trim()
+        .to_string();
 
     if ip.is_empty() {
         anyhow::bail!("Empty response from ip check");
@@ -219,12 +255,13 @@ pub fn openapi_spec() -> Response<BoxBody<Bytes, hyper::Error>> {
 #[openapi(
     info(
         title = "Proxy Rotator API",
-        version = "0.6.0",
+        version = "0.7.0",
         description = "API for inspecting active proxy sessions in proxy-rotator.\n\nAuthenticate with `Authorization: Bearer <api_key>` where `api_key` is set via the `API_KEY` environment variable.",
     ),
     paths(
         list_sessions,
         get_session,
+        force_rotate,
         verify_username,
     ),
     components(
@@ -267,10 +304,7 @@ impl utoipa::Modify for SecurityAddon {
 // Helpers
 // ---------------------------------------------------------------------------
 
-pub fn json_response(
-    status: StatusCode,
-    body: &str,
-) -> Response<BoxBody<Bytes, hyper::Error>> {
+pub fn json_response(status: StatusCode, body: &str) -> Response<BoxBody<Bytes, hyper::Error>> {
     Response::builder()
         .status(status)
         .header("Content-Type", "application/json")

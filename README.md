@@ -2,6 +2,16 @@
 
 A Rust HTTP proxy server that load-balances requests across pools of upstream proxies with least-used rotation, per-request session affinity, and a REST API for session inspection.
 
+Pre-built Docker images: `ghcr.io/1cedsoda/proxy-rotator`  
+TypeScript client: [`@1cedsoda/proxy-rotator-client`](https://github.com/1cedsoda/proxy-rotator/pkgs/npm/proxy-rotator-client)
+
+## Repository layout
+
+```
+proxy-rotator/          # Rust crate — the proxy server
+proxy-rotator-client/   # TypeScript/Node client package (@1cedsoda/proxy-rotator-client)
+```
+
 ## Architecture
 
 ```
@@ -11,9 +21,9 @@ Client ──HTTP/CONNECT──→ proxy-rotator ──→ upstream proxy pool �
 - **No TLS termination** — raw bytes are relayed through CONNECT tunnels. The client's own TLS handshake reaches the destination untouched.
 - Multiple **proxy sets** — each with its own pool of upstream proxies and rotation strategy.
 - **Least-used rotation** — requests go to the proxy with the lowest use count, with random tie-breaking among equally-used proxies.
-- **Per-request session affinity** — controlled via the username, pin a session key to the same upstream proxy for a specified duration (0–1440 minutes).
+- **Session affinity** — pin a session to the same upstream proxy for a configurable duration (0–1440 minutes), encoded in the username.
 - **Per-proxy credentials** — each proxy entry includes its own username:password.
-- **REST API** — inspect active sessions and their assigned upstream proxies.
+- **REST API** — inspect active sessions, verify usernames, and force-rotate sessions.
 
 ## Configuration
 
@@ -45,167 +55,178 @@ One proxy per line. Format: `host:port:username:password` or `host:port` (no aut
 
 ### Environment variables
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `RUST_LOG` | Log level (overrides config) | from config |
-| `API_KEY` | Bearer token for the `/api/sessions` endpoints. If unset, session API endpoints are disabled. | _(disabled)_ |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RUST_LOG` | from config | Log level |
+| `API_KEY` | _(disabled)_ | Bearer token for the `/api/` endpoints. If unset, all API endpoints except `/api/openapi.json` are disabled. |
 
-## Usage
+## Username format
+
+The `Proxy-Authorization` username is a **base64-encoded JSON object** with three fields:
+
+```json
+{ "meta": { "platform": "myapp", "user": "alice" }, "minutes": 60, "set": "residential" }
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `set` | string | Proxy set name — must match a `[[proxy_set]] name` in config |
+| `minutes` | integer 0–1440 | Affinity duration. `0` = rotate every request, `1440` = 24 h |
+| `meta` | object | Arbitrary string metadata identifying the session (e.g. platform, user) |
+
+The base64 string itself is the affinity key — identical inputs always map to the same session.
+The password is always `x` (ignored by the server).
+
+### Example
 
 ```bash
-# Build
-cargo build --release
+USERNAME=$(echo -n '{"meta":{"platform":"myapp","user":"alice"},"minutes":60,"set":"residential"}' | base64)
 
-# Run (uses ./config.toml by default)
-./target/release/proxy-rotator
-
-# Or specify a config file
-./target/release/proxy-rotator /path/to/config.toml
-
-# Run with API enabled
-API_KEY=mysecretkey ./target/release/proxy-rotator
-```
-
-### Client usage
-
-Clients select a proxy set and control session affinity via the `Proxy-Authorization` header. The **username** format is strictly:
-
-```
-<proxyset>-<minutes>-<sessionkey>
-```
-
-| Part | Rules | Description |
-|------|-------|-------------|
-| `proxyset` | Alphanumeric only | Name of the proxy set to use |
-| `minutes` | Number 0–1440 | Sticky session duration. `0` = new IP every request, `1440` = 24 hours |
-| `sessionkey` | Alphanumeric only | Session identifier for affinity grouping |
-
-The **password** is empty (unused). All three parts are required. No hyphens allowed within any part.
-
-```bash
-# Rotate every request (minutes=0) — each request gets a different proxy
 curl -x http://127.0.0.1:8100 \
-  --proxy-user "residential-0-req1:" \
-  https://httpbin.org/ip
-
-# 5-minute sticky session — same session key reuses the same proxy for 5 min
-curl -x http://127.0.0.1:8100 \
-  --proxy-user "residential-5-abc123:" \
-  https://httpbin.org/ip
-
-# Different session key → independent proxy assignment
-curl -x http://127.0.0.1:8100 \
-  --proxy-user "residential-5-xyz789:" \
-  https://httpbin.org/ip
-
-# Use the "datacenter" proxy set with 10-minute affinity
-curl -x http://127.0.0.1:8100 \
-  --proxy-user "datacenter-10-mysess:" \
-  https://httpbin.org/ip
-
-# 24-hour sticky session
-curl -x http://127.0.0.1:8100 \
-  --proxy-user "residential-1440-longrun:" \
+  --proxy-user "$USERNAME:x" \
   https://httpbin.org/ip
 ```
+
+Use the [TypeScript client](#typescript-client) to build usernames programmatically.
 
 ## REST API
 
-The API allows inspecting active sticky sessions. All session endpoints require the `API_KEY` environment variable to be set and a matching `Authorization: Bearer <key>` header.
+All endpoints require `Authorization: Bearer <API_KEY>`. The OpenAPI spec is at `/api/openapi.json` (no auth required).
 
-The OpenAPI spec is available at `/api/openapi.json` (no auth required).
+### `GET /api/openapi.json`
 
-### Endpoints
+Returns the OpenAPI 3.1 specification.
 
-#### `GET /api/openapi.json`
+### `GET /api/sessions`
 
-Returns the OpenAPI 3.1 specification. **No authentication required.**
-
-```bash
-curl http://127.0.0.1:8100/api/openapi.json
-```
-
-#### `GET /api/sessions`
-
-List all active sticky sessions across all proxy sets.
+List all active sticky sessions.
 
 ```bash
-curl -H "Authorization: Bearer mysecretkey" \
-  http://127.0.0.1:8100/api/sessions
+curl -H "Authorization: Bearer mysecretkey" http://127.0.0.1:8100/api/sessions
 ```
 
-Response:
 ```json
 [
   {
-    "username": "residential-5-abc123",
+    "session_id": 0,
+    "username": "eyJtZXRhIjp7InBsYXRmb3JtIjoibXlhcHAifSwibWludXRlcyI6NjAsInNldCI6InJlc2lkZW50aWFsIn0=",
     "proxy_set": "residential",
     "upstream": "198.51.100.1:6658",
-    "start_date": "2026-02-23T21:00:00Z",
-    "end_date": "2026-02-23T21:05:00Z"
+    "created_at": "2026-03-01T12:00:00Z",
+    "next_rotation_at": "2026-03-01T13:00:00Z",
+    "last_rotation_at": "2026-03-01T12:00:00Z",
+    "metadata": { "platform": "myapp" }
   }
 ]
 ```
 
-#### `GET /api/sessions/{username}`
+| Field | Description |
+|-------|-------------|
+| `created_at` | When the session was first created. Never changes. |
+| `next_rotation_at` | When the current proxy assignment expires. Reset by `force_rotate`. |
+| `last_rotation_at` | When the proxy was last assigned. Equals `created_at` unless `force_rotate` was called. |
 
-Get details of a specific active session by its full username.
+### `GET /api/sessions/{username}`
+
+Get a specific active session by its base64 username (percent-encoded in the path). Returns `404` if not found or expired. Sessions with `minutes=0` are never tracked.
+
+### `POST /api/sessions/{username}/rotate`
+
+Force-rotate the upstream proxy for an existing session. Picks a new upstream via least-used selection, resets `next_rotation_at` to `now + duration`, and updates `last_rotation_at`. The `session_id`, `created_at`, duration, and metadata are preserved.
+
+```bash
+curl -X POST -H "Authorization: Bearer mysecretkey" \
+  http://127.0.0.1:8100/api/sessions/eyJtZXRhIjp.../rotate
+```
+
+Returns the updated `SessionInfo`. Returns `404` if no active session exists.
+
+### `GET /api/verify/{username}`
+
+Pre-flight check — parses the username, verifies the proxy set exists, picks an upstream **without creating a session**, and fetches the outbound IP via `api.ipify.org`. Always returns HTTP 200; check the `ok` field.
 
 ```bash
 curl -H "Authorization: Bearer mysecretkey" \
-  http://127.0.0.1:8100/api/sessions/residential-5-abc123
+  http://127.0.0.1:8100/api/verify/eyJtZXRhIjp...
 ```
 
-Response:
 ```json
 {
-  "username": "residential-5-abc123",
+  "ok": true,
   "proxy_set": "residential",
+  "minutes": 60,
+  "metadata": { "platform": "myapp" },
   "upstream": "198.51.100.1:6658",
-  "start_date": "2026-02-23T21:00:00Z",
-  "end_date": "2026-02-23T21:05:00Z"
+  "ip": "198.51.100.1"
 }
 ```
 
-Returns `404` if the session doesn't exist or has expired. Sessions with `minutes=0` are never tracked.
-
 ### OpenAPI spec generation
 
-The `openapi.json` file can be regenerated with:
-
 ```bash
-cargo run --bin gen-openapi
+cargo run --bin gen-openapi --manifest-path proxy-rotator/Cargo.toml
 ```
 
-## How It Works
+## TypeScript client
 
-1. Client connects and sends an HTTP request or CONNECT tunnel request
-2. The username is parsed from `Proxy-Authorization: Basic base64(<proxyset>-<minutes>-<sessionkey>:)`
-3. An upstream proxy is chosen using **least-used rotation** (lowest use count, random tie-breaking)
-4. If `minutes > 0`, the session key is pinned to that proxy for the specified duration
-5. Credentials from the proxy entry (`host:port:user:pass`) are forwarded to the upstream proxy
-6. For **CONNECT**: a tunnel is established through the upstream proxy, then raw bytes are relayed bidirectionally — no TLS breaking
-7. For **plain HTTP**: the request is forwarded through the upstream proxy with the absolute URI
+`@1cedsoda/proxy-rotator-client` is published to GitHub Packages.
 
-### Least-used rotation
+### Installation
 
-Every proxy tracks a use counter. On each request, the rotator:
-1. Finds the minimum use count across all proxies in the set
-2. Collects all proxies with that minimum count
-3. Picks one at random from the candidates
+Add to `.npmrc`:
+```
+@1cedsoda:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
+```
 
-This ensures even distribution while avoiding predictable patterns.
+```bash
+npm install @1cedsoda/proxy-rotator-client
+```
 
-### Session affinity
+### API
 
-When `minutes > 0`, the first request with a given session key gets assigned an upstream proxy via least-used selection. Subsequent requests with the same session key and minutes value reuse that proxy until the affinity window expires. Different session keys get independent upstream proxy assignments, allowing one client to maintain multiple concurrent sessions through different proxies. Expired entries are cleaned up every 60 seconds.
+| Export | Description |
+|--------|-------------|
+| `configureProxy({ proxyUrl, apiKey })` | Call once at startup. Required for `buildAndVerifyProxyUsername`. |
+| `buildAndVerifyProxyUsername(set, minutes, meta)` | Encodes username and verifies it via `/api/verify`. Throws on failure. |
+| `buildProxyUsername(set, minutes, meta)` | Pure sync encoder — no verification. |
+| `parseProxyUsername(username)` | Decode a username back to its components. |
+| `ProxyRotatorClient` | Raw API client: `listSessions`, `getSession`, `verifyUsername`, `forceRotate`. |
 
-When `minutes = 0`, every request goes through pure least-used rotation with no stickiness.
+### Usage
+
+```ts
+import { configureProxy, buildAndVerifyProxyUsername } from "@1cedsoda/proxy-rotator-client";
+
+// Call once at startup
+configureProxy({ proxyUrl: "http://proxy-rotator:8100", apiKey: "mysecretkey" });
+
+// Build + verify (throws if set is wrong or upstream is unreachable)
+const username = await buildAndVerifyProxyUsername("residential", 60, { platform: "myapp", user: "alice" });
+
+// Use as proxy credentials (password is always "x")
+const proxyUrl = new URL("http://proxy-rotator:8100");
+proxyUrl.username = username;
+proxyUrl.password = "x";
+```
+
+## How it works
+
+1. Client sends an HTTP request or CONNECT tunnel with `Proxy-Authorization: Basic <base64>`
+2. The base64 string is decoded and parsed to extract `set`, `minutes`, and `meta`
+3. An upstream proxy is chosen via **least-used rotation** (lowest use count, random tie-breaking)
+4. If `minutes > 0`, the base64 string is used as the affinity key — the same username always maps to the same proxy until the session expires
+5. Upstream credentials from the proxy list are forwarded to the upstream
+6. **CONNECT**: a tunnel is established and bytes are relayed bidirectionally — no TLS termination
+7. **Plain HTTP**: request is forwarded through the upstream with the absolute URI
+8. Expired affinity entries are cleaned up every 60 seconds
 
 ## Docker
 
 ```bash
-docker build -t proxy-rotator .
+# Build from workspace root
+docker build -f proxy-rotator/Dockerfile -t proxy-rotator .
+
 docker run -p 8100:8100 \
   -e API_KEY=mysecretkey \
   -v ./config.toml:/data/config/config.toml:ro \
@@ -213,17 +234,24 @@ docker run -p 8100:8100 \
   proxy-rotator
 ```
 
-See [`deployment/`](deployment/) for a complete docker-compose example with sample proxy files.
+Pre-built image:
 
-Pre-built images: `ghcr.io/<owner>/proxy-rotator`
+```bash
+docker run -p 8100:8100 \
+  -e API_KEY=mysecretkey \
+  -v ./config.toml:/data/config/config.toml:ro \
+  -v ./proxies:/data/config/proxies:ro \
+  ghcr.io/1cedsoda/proxy-rotator:0.7.0
+```
+
+See [`deployment/`](deployment/) for docker-compose examples.
 
 ## Building
 
 ```bash
-cargo build --release
+cargo build --release                  # Rust server
+cd proxy-rotator-client && pnpm install  # TypeScript client
 ```
-
-No special dependencies — pure Rust with tokio/hyper.
 
 ## License
 

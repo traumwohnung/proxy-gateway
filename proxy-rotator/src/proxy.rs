@@ -15,7 +15,11 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing::{debug, error, info, warn};
 
-pub async fn run_proxy(bind_addr: &str, rotator: Arc<Rotator>, api_key: Option<String>) -> Result<()> {
+pub async fn run_proxy(
+    bind_addr: &str,
+    rotator: Arc<Rotator>,
+    api_key: Option<String>,
+) -> Result<()> {
     let listener = TcpListener::bind(bind_addr).await?;
     let api_key: Arc<Option<String>> = Arc::new(api_key);
 
@@ -199,7 +203,8 @@ fn parse_proxy_auth_value(header_val: &str) -> Result<ProxyAuth, String> {
         }
     }
     if obj.len() != 3 {
-        let extra: Vec<&str> = obj.keys()
+        let extra: Vec<&str> = obj
+            .keys()
             .map(String::as_str)
             .filter(|k| !expected_keys.contains(k))
             .collect();
@@ -524,6 +529,11 @@ async fn handle_api_request(
         api::list_sessions(rotator)
     } else if let Some(raw) = path.strip_prefix("/api/sessions/") {
         let username_b64 = percent_decode(raw);
+        // POST .../rotate — force-rotate the session's upstream proxy
+        if req.method() == Method::POST && username_b64.ends_with("/rotate") {
+            let key = username_b64.trim_end_matches("/rotate");
+            return api::force_rotate(rotator, key);
+        }
         api::get_session(rotator, &username_b64)
     } else if let Some(raw) = path.strip_prefix("/api/verify/") {
         let username_b64 = percent_decode(raw);
@@ -596,8 +606,7 @@ mod tests {
 
     /// Wrap a JSON string as a Basic auth header value (username = json, password = "").
     fn auth_header(username_json: &str) -> String {
-        let encoded = base64::engine::general_purpose::STANDARD
-            .encode(format!("{username_json}:"));
+        let encoded = base64::engine::general_purpose::STANDARD.encode(format!("{username_json}:"));
         format!("Basic {encoded}")
     }
 
@@ -616,8 +625,14 @@ mod tests {
         let auth = parse_proxy_auth_value(&auth_header(&u)).unwrap();
         assert_eq!(auth.set_name, "residential");
         assert_eq!(auth.affinity_minutes, 5);
-        assert_eq!(auth.metadata["app"], serde_json::Value::String("myapp".to_string()));
-        assert_eq!(auth.metadata["user"], serde_json::Value::String("alice".to_string()));
+        assert_eq!(
+            auth.metadata["app"],
+            serde_json::Value::String("myapp".to_string())
+        );
+        assert_eq!(
+            auth.metadata["user"],
+            serde_json::Value::String("alice".to_string())
+        );
     }
 
     #[test]

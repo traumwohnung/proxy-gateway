@@ -1,0 +1,9 @@
+{
+    "name": "proxy-rotator-workspace",
+    "private": true,
+    "workspaces": ["proxy-rotator-client"],
+    "devDependencies": {
+        "@biomejs/biome": "^2.4.7",
+        "lefthook": "^2.1.4"
+    }
+}
