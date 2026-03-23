@@ -23,7 +23,7 @@ pub async fn run_proxy(
     let listener = TcpListener::bind(bind_addr).await?;
     let api_key: Arc<Option<String>> = Arc::new(api_key);
 
-    info!("Proxy rotator listening on {bind_addr}");
+    info!("Proxy gateway listening on {bind_addr}");
     info!("Available proxy sets: {:?}", rotator.set_names());
     for name in rotator.set_names() {
         if let Some(count) = rotator.set_info(name) {
@@ -589,7 +589,7 @@ fn error_response(status: StatusCode, message: String) -> Response<BoxBody<Bytes
 fn proxy_auth_error(message: &str) -> Response<BoxBody<Bytes, hyper::Error>> {
     Response::builder()
         .status(StatusCode::PROXY_AUTHENTICATION_REQUIRED)
-        .header("Proxy-Authenticate", "Basic realm=\"proxy-rotator\"")
+        .header("Proxy-Authenticate", "Basic realm=\"proxy-gateway\"")
         .header("Content-Type", "text/plain")
         .body(
             Full::new(Bytes::from(message.to_string()))

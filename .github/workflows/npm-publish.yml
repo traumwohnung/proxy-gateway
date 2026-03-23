@@ -29,11 +29,11 @@ jobs:
           version: latest
 
       - name: Install dependencies
-        working-directory: proxy-rotator-client
+        working-directory: proxy-gateway-client
         run: pnpm install
 
       - name: Publish to GitHub Packages
-        working-directory: proxy-rotator-client
+        working-directory: proxy-gateway-client
         run: pnpm publish --access public --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

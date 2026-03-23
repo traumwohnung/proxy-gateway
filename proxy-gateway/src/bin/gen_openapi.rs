@@ -2,7 +2,7 @@
 //!
 //! Usage: cargo run --bin gen_openapi
 
-use proxy_rotator::api;
+use proxy_gateway::api;
 use std::path::Path;
 
 fn main() {

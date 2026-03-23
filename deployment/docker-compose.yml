@@ -1,6 +1,6 @@
 services:
-  proxy-rotator:
-    image: ghcr.io/1cedsoda/proxy-rotator:main
+  proxy-gateway:
+    image: ghcr.io/1cedsoda/proxy-gateway:main
     # Or build locally:
     # build:
     #   context: ..

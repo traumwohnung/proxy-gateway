@@ -1,7 +1,7 @@
 import type { SessionInfo, VerifyResult } from "./types";
 
-export interface ProxyRotatorClientOptions {
-    /** Base URL of the proxy-rotator, e.g. "http://proxy-rotator:8100" */
+export interface ProxyGatewayClientOptions {
+    /** Base URL of the proxy-gateway, e.g. "http://proxy-gateway:8100" */
     baseUrl: string;
     /** Static API key for authentication (Bearer token) */
     apiKey?: string;
@@ -11,12 +11,12 @@ export interface ProxyRotatorClientOptions {
     timeout?: number;
 }
 
-export class ProxyRotatorClient {
+export class ProxyGatewayClient {
     private baseUrl: string;
     private getToken: () => string | null;
     private timeout: number;
 
-    constructor(opts: ProxyRotatorClientOptions) {
+    constructor(opts: ProxyGatewayClientOptions) {
         this.baseUrl = opts.baseUrl.replace(/\/$/, "");
         this.getToken = opts.getToken ?? (opts.apiKey ? () => opts.apiKey! : () => null);
         this.timeout = opts.timeout ?? 10_000;
@@ -41,7 +41,7 @@ export class ProxyRotatorClient {
             });
             if (!res.ok) {
                 const body = await res.text().catch(() => "");
-                throw new Error(`proxy-rotator ${res.status}: ${body}`);
+                throw new Error(`proxy-gateway ${res.status}: ${body}`);
             }
             return (await res.json()) as T;
         } finally {

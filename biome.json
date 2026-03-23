@@ -1,7 +1,7 @@
 {
     "$schema": "https://biomejs.dev/schemas/2.4.6/schema.json",
     "files": {
-        "includes": ["proxy-rotator-client/**"]
+        "includes": ["proxy-gateway-client/**"]
     },
     "formatter": {
         "enabled": true,

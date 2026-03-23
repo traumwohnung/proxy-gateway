@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
-use proxy_rotator::{config, env, proxy, rotator};
+use proxy_gateway::{config, env, proxy, rotator};
 
 #[tokio::main]
 async fn main() -> Result<()> {

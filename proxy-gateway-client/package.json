@@ -1,5 +1,5 @@
 {
-    "name": "@1cedsoda/proxy-rotator-client",
+    "name": "@1cedsoda/proxy-gateway-client",
     "version": "0.7.0",
     "type": "module",
     "exports": {

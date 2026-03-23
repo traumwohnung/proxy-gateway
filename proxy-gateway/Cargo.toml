@@ -1,14 +1,14 @@
 [package]
-name = "proxy-rotator"
+name = "proxy-gateway"
 version = "0.7.0"
 edition = "2021"
 
 [lib]
-name = "proxy_rotator"
+name = "proxy_gateway"
 path = "src/lib.rs"
 
 [[bin]]
-name = "proxy-rotator"
+name = "proxy-gateway"
 path = "src/main.rs"
 
 [[bin]]

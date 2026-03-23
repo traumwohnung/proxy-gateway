@@ -254,9 +254,9 @@ pub fn openapi_spec() -> Response<BoxBody<Bytes, hyper::Error>> {
 #[derive(utoipa::OpenApi)]
 #[openapi(
     info(
-        title = "Proxy Rotator API",
+        title = "Proxy Gateway API",
         version = "0.7.0",
-        description = "API for inspecting active proxy sessions in proxy-rotator.\n\nAuthenticate with `Authorization: Bearer <api_key>` where `api_key` is set via the `API_KEY` environment variable.",
+        description = "API for inspecting active proxy sessions in proxy-gateway.\n\nAuthenticate with `Authorization: Bearer <api_key>` where `api_key` is set via the `API_KEY` environment variable.",
     ),
     paths(
         list_sessions,
@@ -346,7 +346,7 @@ mod tests {
         assert!(parsed["openapi"].as_str().unwrap().starts_with("3.1"));
         assert_eq!(
             parsed["info"]["title"].as_str().unwrap(),
-            "Proxy Rotator API"
+            "Proxy Gateway API"
         );
         assert!(parsed["paths"]["/api/sessions"].is_object());
         assert!(parsed["paths"]["/api/sessions/{username}"].is_object());

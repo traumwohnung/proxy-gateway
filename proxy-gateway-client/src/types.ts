@@ -59,7 +59,7 @@ export type VerifyResult = z.infer<typeof verifyResultSchema>;
 // ---------------------------------------------------------------------------
 
 /**
- * Build the proxy-rotator username — a base64-encoded JSON object.
+ * Build the proxy-gateway username — a base64-encoded JSON object.
  * Pure and synchronous — no verification. Use `buildAndVerifyProxyUsername`
  * to also verify that the proxy set exists and the upstream is reachable.
  *
@@ -72,7 +72,7 @@ export function buildProxyUsername(proxySet: string, affinityMinutes: number, me
 }
 
 /**
- * Decode a proxy-rotator username back into its components.
+ * Decode a proxy-gateway username back into its components.
  * Returns `null` if the string cannot be decoded or parsed.
  */
 export function parseProxyUsername(username: string): {

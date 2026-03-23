@@ -1,8 +1,8 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Proxy Rotator API",
-    "description": "API for inspecting active proxy sessions in proxy-rotator.\n\nAuthenticate with `Authorization: Bearer <api_key>` where `api_key` is set via the `API_KEY` environment variable.",
+    "title": "Proxy Gateway API",
+    "description": "API for inspecting active proxy sessions in proxy-gateway.\n\nAuthenticate with `Authorization: Bearer <api_key>` where `api_key` is set via the `API_KEY` environment variable.",
     "license": {
       "name": ""
     },

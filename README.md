@@ -1,21 +1,21 @@
-# proxy-rotator
+# proxy-gateway
 
 A Rust HTTP proxy server that load-balances requests across pools of upstream proxies with least-used rotation, per-request session affinity, and a REST API for session inspection.
 
-Pre-built Docker images: `ghcr.io/1cedsoda/proxy-rotator`  
-TypeScript client: [`@1cedsoda/proxy-rotator-client`](https://github.com/1cedsoda/proxy-rotator/pkgs/npm/proxy-rotator-client)
+Pre-built Docker images: `ghcr.io/1cedsoda/proxy-gateway`  
+TypeScript client: [`@1cedsoda/proxy-gateway-client`](https://github.com/1cedsoda/proxy-gateway/pkgs/npm/proxy-gateway-client)
 
 ## Repository layout
 
 ```
-proxy-rotator/          # Rust crate — the proxy server
-proxy-rotator-client/   # TypeScript/Node client package (@1cedsoda/proxy-rotator-client)
+proxy-gateway/          # Rust crate — the proxy server
+proxy-gateway-client/   # TypeScript/Node client package (@1cedsoda/proxy-gateway-client)
 ```
 
 ## Architecture
 
 ```
-Client ──HTTP/CONNECT──→ proxy-rotator ──→ upstream proxy pool ──→ Destination
+Client ──HTTP/CONNECT──→ proxy-gateway ──→ upstream proxy pool ──→ Destination
 ```
 
 - **No TLS termination** — raw bytes are relayed through CONNECT tunnels. The client's own TLS handshake reaches the destination untouched.
@@ -181,12 +181,12 @@ curl -H "Authorization: Bearer mysecretkey" \
 ### OpenAPI spec generation
 
 ```bash
-cargo run --bin gen-openapi --manifest-path proxy-rotator/Cargo.toml
+cargo run --bin gen-openapi --manifest-path proxy-gateway/Cargo.toml
 ```
 
 ## TypeScript client
 
-`@1cedsoda/proxy-rotator-client` is published to GitHub Packages.
+`@1cedsoda/proxy-gateway-client` is published to GitHub Packages.
 
 ### Installation
 
@@ -197,7 +197,7 @@ Add to `.npmrc`:
 ```
 
 ```bash
-npm install @1cedsoda/proxy-rotator-client
+npm install @1cedsoda/proxy-gateway-client
 ```
 
 ### API
@@ -208,21 +208,21 @@ npm install @1cedsoda/proxy-rotator-client
 | `buildAndVerifyProxyUsername(set, minutes, meta)` | Encodes username and verifies it via `/api/verify`. Throws on failure. |
 | `buildProxyUsername(set, minutes, meta)` | Pure sync encoder — no verification. |
 | `parseProxyUsername(username)` | Decode a username back to its components. |
-| `ProxyRotatorClient` | Raw API client: `listSessions`, `getSession`, `verifyUsername`, `forceRotate`. |
+| `ProxyGatewayClient` | Raw API client: `listSessions`, `getSession`, `verifyUsername`, `forceRotate`. |
 
 ### Usage
 
 ```ts
-import { configureProxy, buildAndVerifyProxyUsername } from "@1cedsoda/proxy-rotator-client";
+import { configureProxy, buildAndVerifyProxyUsername } from "@1cedsoda/proxy-gateway-client";
 
 // Call once at startup
-configureProxy({ proxyUrl: "http://proxy-rotator:8100", apiKey: "mysecretkey" });
+configureProxy({ proxyUrl: "http://proxy-gateway:8100", apiKey: "mysecretkey" });
 
 // Build + verify (throws if set is wrong or upstream is unreachable)
 const username = await buildAndVerifyProxyUsername("residential", 60, { platform: "myapp", user: "alice" });
 
 // Use as proxy credentials (password is always "x")
-const proxyUrl = new URL("http://proxy-rotator:8100");
+const proxyUrl = new URL("http://proxy-gateway:8100");
 proxyUrl.username = username;
 proxyUrl.password = "x";
 ```
@@ -246,19 +246,19 @@ The proxy source abstraction (`ProxySource` trait in `source.rs`) makes it easy 
 2. Create a struct that implements the `ProxySource` trait (`request_endpoint`, `describe`, `len`)
 3. Add a match arm in `ProxySourceConfig::from_type_and_table` and `build_source`
 
-The rotator, API, and all routing code are source-agnostic — no changes needed there.
+The gateway, API, and all routing code are source-agnostic — no changes needed there.
 
 ## Docker
 
 ```bash
 # Build from workspace root
-docker build -f proxy-rotator/Dockerfile -t proxy-rotator .
+docker build -f proxy-gateway/Dockerfile -t proxy-gateway .
 
 docker run -p 8100:8100 \
   -e API_KEY=mysecretkey \
   -v ./config.toml:/data/config/config.toml:ro \
   -v ./proxies:/data/config/proxies:ro \
-  proxy-rotator
+  proxy-gateway
 ```
 
 Pre-built image:
@@ -268,7 +268,7 @@ docker run -p 8100:8100 \
   -e API_KEY=mysecretkey \
   -v ./config.toml:/data/config/config.toml:ro \
   -v ./proxies:/data/config/proxies:ro \
-  ghcr.io/1cedsoda/proxy-rotator:0.7.0
+  ghcr.io/1cedsoda/proxy-gateway:0.7.0
 ```
 
 See [`deployment/`](deployment/) for docker-compose examples.
@@ -276,8 +276,8 @@ See [`deployment/`](deployment/) for docker-compose examples.
 ## Building
 
 ```bash
-cargo build --release                  # Rust server
-cd proxy-rotator-client && pnpm install  # TypeScript client
+cargo build --release                    # Rust server
+cd proxy-gateway-client && pnpm install  # TypeScript client
 ```
 
 ## License

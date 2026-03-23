@@ -10,7 +10,7 @@ use std::time::{Duration, Instant, SystemTime};
 // Rotator
 // ---------------------------------------------------------------------------
 
-/// A proxy rotator that manages multiple proxy sets.
+/// A proxy gateway that manages multiple proxy sets.
 ///
 /// Each set delegates endpoint selection to its [`crate::source::ProxySource`],
 /// which encapsulates all source-specific logic (file I/O, API calls, address

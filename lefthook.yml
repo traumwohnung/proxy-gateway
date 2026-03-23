@@ -5,4 +5,4 @@ pre-commit:
       run: bunx biome format --write {staged_files} && git add {staged_files}
     cargo-fmt:
       glob: "*.rs"
-      run: cargo fmt --manifest-path proxy-rotator/Cargo.toml && git add {staged_files}
+      run: cargo fmt --manifest-path proxy-gateway/Cargo.toml && git add {staged_files}

@@ -479,7 +479,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "proxy-rotator"
+name = "proxy-gateway"
 version = "0.7.0"
 dependencies = [
  "anyhow",

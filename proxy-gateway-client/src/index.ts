@@ -1,4 +1,4 @@
-export { ProxyRotatorClient, type ProxyRotatorClientOptions } from "./client";
+export { ProxyGatewayClient, type ProxyGatewayClientOptions } from "./client";
 // Types
 export type { ApiError, SessionInfo, SessionMetadata, VerifyResult } from "./types";
 // Zod schemas
