@@ -174,7 +174,7 @@ mod tests {
     #[tokio::test]
     async fn test_datacenter_proxy() {
         let source = make_source(ProductConfig::Datacenter(DatacenterConfig {
-            countries: vec![crate::location::Country::DE],
+            countries: vec![proxy_gateway_core::Country::DE],
         }));
         let proxy = source
             .get_source_proxy(&AffinityParams::new())
@@ -204,7 +204,7 @@ mod tests {
     async fn test_force_rotate_changes_only_session_id() {
         let source = make_source(ProductConfig::Residential(ResidentialConfig {
             quality: ResidentialQuality::High,
-            countries: vec![crate::location::Country::US],
+            countries: vec![proxy_gateway_core::Country::US],
             city: None,
         }));
         let ap = params(&[("sesstime", "10")]);
@@ -264,7 +264,7 @@ mod tests {
             host: "proxy.bottingtools.com".to_string(),
             product: ProductConfig::Residential(ResidentialConfig {
                 quality: ResidentialQuality::High,
-                countries: vec![crate::location::Country::NL],
+                countries: vec![proxy_gateway_core::Country::NL],
                 city: Some("amsterdam".to_string()),
             }),
         };
@@ -280,7 +280,7 @@ mod tests {
             host: "proxy.bottingtools.com".to_string(),
             product: ProductConfig::Residential(ResidentialConfig {
                 quality: ResidentialQuality::High,
-                countries: vec![crate::location::Country::NL, crate::location::Country::DE],
+                countries: vec![proxy_gateway_core::Country::NL, proxy_gateway_core::Country::DE],
                 city: Some("amsterdam".to_string()),
             }),
         };

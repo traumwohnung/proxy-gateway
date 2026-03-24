@@ -1,4 +1,4 @@
-use crate::location::Country;
+use proxy_gateway_core::Country;
 
 /// Configuration for the bottingtools proxy source.
 ///

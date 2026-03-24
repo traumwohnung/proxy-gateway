@@ -1,3 +1,5 @@
+use proxy_gateway_core::Country;
+
 /// Configuration for the geonode proxy source.
 ///
 /// Geonode encodes targeting and session parameters directly into the upstream
@@ -51,10 +53,9 @@ pub struct GeonodeConfig {
     pub port: u16,
 
     /// Target countries (multi-select). One is picked randomly per request.
-    /// Uses ISO 3166-1 alpha-2 codes (e.g. `"US"`, `"DE"`).
     /// If empty, no country targeting is applied.
     #[serde(default)]
-    pub countries: Vec<String>,
+    pub countries: Vec<Country>,
 
     /// Session configuration. If absent, rotating sessions are used.
     #[serde(default)]

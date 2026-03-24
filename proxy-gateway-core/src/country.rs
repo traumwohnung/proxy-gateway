@@ -1,9 +1,6 @@
-//! Typed location values for bottingtools proxy targeting.
-//!
-//! Countries are valid for all product types. Cities are residential-only
-//! and currently available for NL only (as exposed by the bottingtools editor).
+//! ISO 3166-1 alpha-2 country codes, shared across proxy sources.
 
-/// ISO 3166-1 alpha-2 country codes supported by bottingtools.
+/// ISO 3166-1 alpha-2 country codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum Country {

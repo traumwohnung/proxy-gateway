@@ -11,6 +11,7 @@
 
 mod affinity_params;
 mod cheap_random;
+mod country;
 mod counting_pool;
 mod proxy_format;
 mod proxy_source;
@@ -18,6 +19,7 @@ mod source_proxy;
 
 pub use affinity_params::AffinityParams;
 pub use cheap_random::cheap_random;
+pub use country::Country;
 pub use counting_pool::CountingPool;
 pub use proxy_format::{parse_proxy_line, ProxyFormat};
 pub use proxy_source::ProxySource;

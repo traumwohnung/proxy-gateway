@@ -48,7 +48,10 @@ impl ProxySource for GeonodeSource {
     fn describe(&self) -> String {
         let mut parts = vec!["geonode".to_string()];
         if !self.config.countries.is_empty() {
-            parts.push(self.config.countries.join(","));
+            let codes: Vec<&str> = self.config.countries.iter()
+                .map(|c| c.as_param_str())
+                .collect();
+            parts.push(codes.join(",").to_ascii_uppercase());
         }
         parts.push(format!("{}@{}:{}", self.config.username, self.config.host, self.config.port));
         parts.join(" ")
@@ -65,14 +68,14 @@ mod tests {
     use super::*;
     use crate::config::{SessionConfig, StickyConfig};
 
-    fn make_source(session: SessionConfig, countries: Vec<&str>) -> GeonodeSource {
+    fn make_source(session: SessionConfig, countries: Vec<proxy_gateway_core::Country>) -> GeonodeSource {
         std::env::set_var("TEST_GN_PASS", "testpassword");
         GeonodeSource::from_config(&GeonodeConfig {
             username: "geonode-exampleuser".to_string(),
             password_env: "TEST_GN_PASS".to_string(),
             host: "premium-residential.geonode.com".to_string(),
             port: 9000,
-            countries: countries.into_iter().map(str::to_string).collect(),
+            countries,
             session,
         })
         .unwrap()
@@ -90,7 +93,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rotating_with_country() {
-        let source = make_source(SessionConfig::Rotating, vec!["US"]);
+        let source = make_source(SessionConfig::Rotating, vec![proxy_gateway_core::Country::US]);
         let proxy = source.get_source_proxy(&AffinityParams::new()).await.unwrap();
         assert_eq!(proxy.username.as_deref(), Some("geonode-exampleuser-country-US"));
     }
@@ -114,7 +117,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_describe() {
-        let source = make_source(SessionConfig::Rotating, vec!["US", "DE"]);
+        let source = make_source(SessionConfig::Rotating, vec![proxy_gateway_core::Country::US, proxy_gateway_core::Country::DE]);
         assert_eq!(
             source.describe(),
             "geonode US,DE geonode-exampleuser@premium-residential.geonode.com:9000"

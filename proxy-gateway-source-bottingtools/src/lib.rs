@@ -5,7 +5,6 @@
 //! fast mode) into the upstream proxy username.
 
 mod config;
-mod location;
 mod source;
 mod username;
 
