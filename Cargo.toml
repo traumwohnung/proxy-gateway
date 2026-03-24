@@ -4,6 +4,7 @@ members = [
     "proxy-gateway-core",
     "proxy-gateway-source-bottingtools",
     "proxy-gateway-source-static-file",
+    "proxy-gateway-source-geonode",
 ]
 resolver = "2"
 
@@ -12,9 +13,11 @@ resolver = "2"
 proxy-gateway-core = { path = "proxy-gateway-core" }
 proxy-gateway-source-bottingtools = { path = "proxy-gateway-source-bottingtools" }
 proxy-gateway-source-static-file = { path = "proxy-gateway-source-static-file" }
+proxy-gateway-source-geonode = { path = "proxy-gateway-source-geonode" }
 
 # Async runtime & networking
 tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 hyper = { version = "1", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
 http-body-util = "0.1"

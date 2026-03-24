@@ -19,6 +19,7 @@ path = "src/bin/gen_openapi.rs"
 proxy-gateway-core.workspace = true
 proxy-gateway-source-bottingtools.workspace = true
 proxy-gateway-source-static-file.workspace = true
+proxy-gateway-source-geonode.workspace = true
 tokio.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true

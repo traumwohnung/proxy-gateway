@@ -37,6 +37,8 @@ pub enum ProxySourceConfig {
     StaticFile(proxy_gateway_source_static_file::StaticFileConfig),
     /// Generate proxies dynamically via bottingtools.
     Bottingtools(proxy_gateway_source_bottingtools::BottingtoolsConfig),
+    /// Fetch proxies on-demand from the geonode REST API.
+    Geonode(proxy_gateway_source_geonode::GeonodeConfig),
 }
 
 impl ProxySourceConfig {
@@ -60,8 +62,15 @@ impl ProxySourceConfig {
                     .map_err(|e| anyhow::anyhow!("invalid bottingtools source config: {e}"))?;
                 Ok(Self::Bottingtools(cfg))
             }
+            "geonode" => {
+                let cfg: proxy_gateway_source_geonode::GeonodeConfig = table
+                    .clone()
+                    .try_into()
+                    .map_err(|e| anyhow::anyhow!("invalid geonode source config: {e}"))?;
+                Ok(Self::Geonode(cfg))
+            }
             other => anyhow::bail!(
-                "unknown source type '{}'. Supported types: static_file, bottingtools",
+                "unknown source type '{}'. Supported types: static_file, bottingtools, geonode",
                 other
             ),
         }
@@ -81,5 +90,6 @@ pub fn build_source(cfg: &ProxySourceConfig, config_dir: &Path) -> Result<Box<dy
             proxy_gateway_source_static_file::build_source(sc, config_dir)
         }
         ProxySourceConfig::Bottingtools(sc) => proxy_gateway_source_bottingtools::build_source(sc),
+        ProxySourceConfig::Geonode(sc) => proxy_gateway_source_geonode::build_source(sc),
     }
 }

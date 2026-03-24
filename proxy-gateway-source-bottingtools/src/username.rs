@@ -19,7 +19,7 @@
 
 use proxy_gateway_core::{cheap_random, AffinityParams};
 
-use crate::config::{DatacenterConfig, IspConfig, ProductConfig, ResidentialConfig, ResidentialQuality};
+use crate::config::{DatacenterConfig, IspConfig, ProductConfig, ResidentialConfig};
 use crate::location::Country;
 
 /// Build the upstream proxy username for the given product and affinity params.
@@ -165,7 +165,7 @@ pub(crate) fn random_session_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{DatacenterConfig, IspConfig, ResidentialConfig};
+    use crate::config::{DatacenterConfig, IspConfig, ResidentialConfig, ResidentialQuality};
     use crate::location::Country;
 
     fn no_params() -> AffinityParams {
