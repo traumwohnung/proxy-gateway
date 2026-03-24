@@ -490,6 +490,8 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "proxy-gateway-core",
+ "proxy-gateway-source-static-file",
  "serde",
  "serde_json",
  "tempfile",
@@ -498,6 +500,25 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "utoipa",
+]
+
+[[package]]
+name = "proxy-gateway-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "proxy-gateway-source-static-file"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "proxy-gateway-core",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

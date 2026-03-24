@@ -4,6 +4,7 @@
 //! the OpenAPI documentation. These are the real handlers called from `proxy.rs`.
 
 use crate::rotator::{ApiError, Rotator, SessionInfo, VerifyResult};
+use crate::source::AffinityParams;
 use bytes::Bytes;
 use http_body_util::{combinators::BoxBody, BodyExt, Full};
 use hyper::{Response, StatusCode};
@@ -74,7 +75,7 @@ pub fn get_session(rotator: &Rotator, username: &str) -> Response<BoxBody<Bytes,
 /// Force-rotate a session's upstream proxy
 ///
 /// Immediately reassigns the upstream proxy for an existing session via
-/// least-used selection and resets the session TTL. The session ID, metadata,
+/// least-used selection and resets the session TTL. The session ID, affinity params,
 /// and affinity duration are preserved. Use this to escape a bad or slow proxy
 /// without losing session continuity.
 #[utoipa::path(
@@ -146,7 +147,7 @@ pub async fn verify_username(
                 ok: false,
                 proxy_set: String::new(),
                 minutes: 0,
-                metadata: serde_json::Map::new(),
+                affinity_params: AffinityParams::new(),
                 upstream: String::new(),
                 ip: String::new(),
                 error: Some(format!("Invalid username: {e}")),
@@ -163,7 +164,7 @@ pub async fn verify_username(
                 ok: false,
                 proxy_set: auth.set_name.clone(),
                 minutes: auth.affinity_minutes,
-                metadata: auth.metadata,
+                affinity_params: auth.affinity_params,
                 upstream: String::new(),
                 ip: String::new(),
                 error: Some(format!(
@@ -187,7 +188,7 @@ pub async fn verify_username(
                 ok: true,
                 proxy_set: auth.set_name,
                 minutes: auth.affinity_minutes,
-                metadata: auth.metadata,
+                affinity_params: auth.affinity_params,
                 upstream: upstream_addr,
                 ip,
                 error: None,
@@ -199,7 +200,7 @@ pub async fn verify_username(
                 ok: false,
                 proxy_set: auth.set_name,
                 minutes: auth.affinity_minutes,
-                metadata: auth.metadata,
+                affinity_params: auth.affinity_params,
                 upstream: upstream_addr,
                 ip: String::new(),
                 error: Some(format!("Proxy connectivity check failed: {e}")),

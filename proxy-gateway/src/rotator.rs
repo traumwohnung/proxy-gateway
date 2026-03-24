@@ -1,5 +1,5 @@
-use crate::config::{ProxySet, UpstreamProxy};
-use crate::source::EndpointHint;
+use crate::config::{ProxySet, SourceProxy};
+use crate::source::AffinityParams;
 
 use dashmap::DashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -46,7 +46,7 @@ struct AffinityEntry {
     ///
     /// Stored as a value (not an index) so the rotator is source-agnostic:
     /// dynamic sources don't have stable integer indices.
-    proxy: UpstreamProxy,
+    proxy: SourceProxy,
     /// Monotonic instant when the session was created — used for TTL expiry checks.
     started_at: Instant,
     /// Pre-formatted ISO 8601 UTC string of the session creation time. Never changes.
@@ -58,8 +58,8 @@ struct AffinityEntry {
     /// updated to `SystemTime::now()` on every `force_rotate`.
     last_rotation_at: SystemTime,
     duration: Duration,
-    /// The decoded, validated metadata object from the base64-JSON username segment.
-    metadata: serde_json::Map<String, serde_json::Value>,
+    /// The decoded, validated affinity parameters from the base64-JSON username segment.
+    affinity_params: AffinityParams,
 }
 
 /// The resolved upstream proxy for a request.
@@ -95,8 +95,10 @@ pub struct SessionInfo {
     /// When the proxy was last assigned — equals created_at unless force_rotate was called (ISO 8601 UTC).
     #[schema(example = "2026-02-23T21:00:00Z")]
     pub last_rotation_at: String,
-    /// The decoded metadata object from the base64-JSON username segment.
-    pub metadata: serde_json::Map<String, serde_json::Value>,
+    /// The decoded affinity parameters from the base64-JSON username segment.
+    #[serde(rename = "metadata")]
+    #[schema(value_type = Object)]
+    pub affinity_params: AffinityParams,
 }
 
 /// Error response body.
@@ -119,8 +121,10 @@ pub struct VerifyResult {
     /// Affinity minutes parsed from the username.
     #[schema(example = 60)]
     pub minutes: u16,
-    /// The decoded metadata object from the username.
-    pub metadata: serde_json::Map<String, serde_json::Value>,
+    /// The decoded affinity parameters from the username.
+    #[serde(rename = "metadata")]
+    #[schema(value_type = Object)]
+    pub affinity_params: AffinityParams,
     /// The upstream proxy that would be used (host:port).
     #[schema(example = "198.51.100.1:6658")]
     pub upstream: String,
@@ -161,16 +165,21 @@ impl Rotator {
     ///
     /// `affinity_minutes` controls sticky session duration (0 = no affinity).
     /// `meta_b64` is the raw base64 segment used as the affinity map key.
-    /// `metadata` is the decoded, validated JSON fields stored in the session entry.
+    /// `affinity_params` is the decoded, validated JSON fields stored in the session entry.
     pub fn next_proxy(
         &self,
         set_name: &str,
         affinity_minutes: u16,
         meta_b64: &str,
-        metadata: serde_json::Map<String, serde_json::Value>,
+        affinity_params: AffinityParams,
     ) -> Option<ResolvedProxy> {
         let set = self.sets.iter().find(|s| s.name == set_name)?;
-        let proxy = set.pick(affinity_minutes, meta_b64, metadata, &self.next_session_id)?;
+        let proxy = set.pick(
+            affinity_minutes,
+            meta_b64,
+            affinity_params,
+            &self.next_session_id,
+        )?;
         Some(ResolvedProxy {
             host: proxy.host.clone(),
             port: proxy.port,
@@ -194,10 +203,9 @@ impl Rotator {
                     return None; // expired — treat as not found
                 }
 
-                let hint = EndpointHint {
-                    metadata: Some(&entry.metadata),
-                };
-                let new_proxy = set.source.request_endpoint(&hint)?;
+                let new_proxy = set
+                    .source
+                    .get_source_proxy_force_rotate(&entry.affinity_params, &entry.proxy)?;
 
                 let now = SystemTime::now();
                 entry.last_rotation_at = now;
@@ -212,7 +220,7 @@ impl Rotator {
                     created_at: entry.created_at.clone(),
                     next_rotation_at: format_system_time(entry.next_rotation_at),
                     last_rotation_at: format_system_time(entry.last_rotation_at),
-                    metadata: entry.metadata.clone(),
+                    affinity_params: entry.affinity_params.clone(),
                 });
             }
         }
@@ -223,8 +231,8 @@ impl Rotator {
     /// Used for pre-flight verification checks.
     pub fn pick_any(&self, set_name: &str) -> Option<ResolvedProxy> {
         let set = self.sets.iter().find(|s| s.name == set_name)?;
-        let hint = EndpointHint::default();
-        let proxy = set.source.request_endpoint(&hint)?;
+        let empty = AffinityParams::new();
+        let proxy = set.source.get_source_proxy(&empty)?;
         Some(ResolvedProxy {
             host: proxy.host.clone(),
             port: proxy.port,
@@ -236,14 +244,6 @@ impl Rotator {
     /// List all available proxy set names.
     pub fn set_names(&self) -> Vec<&str> {
         self.sets.iter().map(|s| s.name.as_str()).collect()
-    }
-
-    /// Get stats about a proxy set: endpoint count if known statically.
-    pub fn set_info(&self, name: &str) -> Option<usize> {
-        self.sets
-            .iter()
-            .find(|s| s.name == name)
-            .and_then(|s| s.source.len())
     }
 
     /// Get session info for a specific username.
@@ -267,7 +267,7 @@ impl Rotator {
                     created_at: entry.created_at.clone(),
                     next_rotation_at: format_system_time(entry.next_rotation_at),
                     last_rotation_at: format_system_time(entry.last_rotation_at),
-                    metadata: entry.metadata.clone(),
+                    affinity_params: entry.affinity_params.clone(),
                 });
             }
         }
@@ -294,7 +294,7 @@ impl Rotator {
                     created_at: entry.created_at.clone(),
                     next_rotation_at: format_system_time(entry.next_rotation_at),
                     last_rotation_at: format_system_time(entry.last_rotation_at),
-                    metadata: entry.metadata.clone(),
+                    affinity_params: entry.affinity_params.clone(),
                 });
             }
         }
@@ -318,15 +318,12 @@ impl RotatorSet {
         &self,
         affinity_minutes: u16,
         username_b64: &str,
-        metadata: serde_json::Map<String, serde_json::Value>,
+        affinity_params: AffinityParams,
         id_counter: &AtomicU64,
-    ) -> Option<UpstreamProxy> {
+    ) -> Option<SourceProxy> {
         if affinity_minutes == 0 {
             // No affinity — delegate directly to the source.
-            let hint = EndpointHint {
-                metadata: Some(&metadata),
-            };
-            return self.source.request_endpoint(&hint);
+            return self.source.get_source_proxy(&affinity_params);
         }
 
         let duration = Duration::from_secs(affinity_minutes as u64 * 60);
@@ -339,10 +336,7 @@ impl RotatorSet {
         }
 
         // No valid entry — ask the source for a new endpoint.
-        let hint = EndpointHint {
-            metadata: Some(&metadata),
-        };
-        let proxy = self.source.request_endpoint(&hint)?;
+        let proxy = self.source.get_source_proxy(&affinity_params)?;
 
         let session_id = id_counter.fetch_add(1, Ordering::Relaxed);
         let now_wall = SystemTime::now();
@@ -356,7 +350,7 @@ impl RotatorSet {
                 next_rotation_at: now_wall + duration,
                 last_rotation_at: now_wall,
                 duration,
-                metadata,
+                affinity_params,
             },
         );
 
@@ -443,8 +437,8 @@ pub fn make_username_b64(set: &str, minutes: u16, meta_pairs: &[(&str, &str)]) -
     base64::engine::general_purpose::STANDARD.encode(json.to_string())
 }
 
-pub fn empty_metadata() -> serde_json::Map<String, serde_json::Value> {
-    serde_json::Map::new()
+pub fn empty_affinity_params() -> AffinityParams {
+    AffinityParams::new()
 }
 
 // ---------------------------------------------------------------------------
@@ -454,60 +448,49 @@ pub fn empty_metadata() -> serde_json::Map<String, serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::UpstreamProxy;
-    use crate::source::{EndpointHint, ProxyEntry, ProxySource};
+    use crate::config::SourceProxy;
+    use crate::source::{AffinityParams, CountingPool, ProxySource};
     use std::collections::HashMap;
 
     // ------------------------------------------------------------------
-    // Test double: a simple in-memory source backed by a fixed proxy list,
-    // equivalent to the old Vec<UpstreamProxy> inside RotatorSet.
+    // Test double: a simple in-memory source backed by a CountingPool,
+    // equivalent to what StaticFileSource does internally.
     // ------------------------------------------------------------------
 
     struct VecSource {
-        proxies: Vec<ProxyEntry>,
+        pool: CountingPool<SourceProxy>,
     }
 
     impl std::fmt::Debug for VecSource {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "VecSource({} entries)", self.proxies.len())
+            write!(f, "VecSource({} entries)", self.pool.len())
         }
     }
 
     impl ProxySource for VecSource {
-        fn request_endpoint(&self, _hint: &EndpointHint<'_>) -> Option<UpstreamProxy> {
-            if self.proxies.is_empty() {
-                return None;
-            }
-            let idx = crate::source::pick_least_used(&self.proxies);
-            let entry = &self.proxies[idx];
-            entry.use_count.fetch_add(1, Ordering::Relaxed);
-            Some(entry.proxy.clone())
+        fn get_source_proxy(&self, _affinity_params: &AffinityParams) -> Option<SourceProxy> {
+            self.pool.next().cloned()
         }
 
         fn describe(&self) -> String {
-            format!("VecSource({} entries)", self.proxies.len())
-        }
-
-        fn len(&self) -> Option<usize> {
-            Some(self.proxies.len())
+            format!("VecSource({} entries)", self.pool.len())
         }
     }
 
     fn make_test_set(n: usize) -> crate::config::ProxySet {
         let proxies = (0..n)
-            .map(|i| ProxyEntry {
-                proxy: UpstreamProxy {
-                    host: format!("proxy{i}.example.com"),
-                    port: 8080,
-                    username: Some("testuser".to_string()),
-                    password: Some("testpass".to_string()),
-                },
-                use_count: AtomicU64::new(0),
+            .map(|i| SourceProxy {
+                host: format!("proxy{i}.example.com"),
+                port: 8080,
+                username: Some("testuser".to_string()),
+                password: Some("testpass".to_string()),
             })
             .collect();
         crate::config::ProxySet {
             name: "test".to_string(),
-            source: Box::new(VecSource { proxies }),
+            source: Box::new(VecSource {
+                pool: CountingPool::new(proxies),
+            }),
         }
     }
 
@@ -519,7 +502,7 @@ mod tests {
         let mut counts: HashMap<String, usize> = HashMap::new();
         for _ in 0..400 {
             let p = rotator
-                .next_proxy("test", 0, &b64, empty_metadata())
+                .next_proxy("test", 0, &b64, empty_affinity_params())
                 .unwrap();
             *counts.entry(p.host.clone()).or_default() += 1;
         }
@@ -535,7 +518,7 @@ mod tests {
         let rotator = Rotator::new(vec![make_test_set(1)]);
         let b64 = make_username_b64("test", 0, &[("k", "v")]);
         let p = rotator
-            .next_proxy("test", 0, &b64, empty_metadata())
+            .next_proxy("test", 0, &b64, empty_affinity_params())
             .unwrap();
         assert_eq!(p.username.as_deref(), Some("testuser"));
         assert_eq!(p.password.as_deref(), Some("testpass"));
@@ -547,11 +530,11 @@ mod tests {
         let b64 = make_username_b64("test", 5, &[("session", "mysession")]);
 
         let first = rotator
-            .next_proxy("test", 5, &b64, empty_metadata())
+            .next_proxy("test", 5, &b64, empty_affinity_params())
             .unwrap();
         for _ in 0..10 {
             let subsequent = rotator
-                .next_proxy("test", 5, &b64, empty_metadata())
+                .next_proxy("test", 5, &b64, empty_affinity_params())
                 .unwrap();
             assert_eq!(
                 first.host, subsequent.host,
@@ -568,7 +551,7 @@ mod tests {
         let mut hosts = std::collections::HashSet::new();
         for _ in 0..100 {
             let p = rotator
-                .next_proxy("test", 0, &b64, empty_metadata())
+                .next_proxy("test", 0, &b64, empty_affinity_params())
                 .unwrap();
             hosts.insert(p.host);
         }
@@ -583,19 +566,19 @@ mod tests {
         let b64_b = make_username_b64("test", 60, &[("session", "sessB")]);
 
         let pa = rotator
-            .next_proxy("test", 60, &b64_a, empty_metadata())
+            .next_proxy("test", 60, &b64_a, empty_affinity_params())
             .unwrap();
         let pb = rotator
-            .next_proxy("test", 60, &b64_b, empty_metadata())
+            .next_proxy("test", 60, &b64_b, empty_affinity_params())
             .unwrap();
 
         // Both sessions should remain stable.
         for _ in 0..5 {
             let pa2 = rotator
-                .next_proxy("test", 60, &b64_a, empty_metadata())
+                .next_proxy("test", 60, &b64_a, empty_affinity_params())
                 .unwrap();
             let pb2 = rotator
-                .next_proxy("test", 60, &b64_b, empty_metadata())
+                .next_proxy("test", 60, &b64_b, empty_affinity_params())
                 .unwrap();
             assert_eq!(pa.host, pa2.host);
             assert_eq!(pb.host, pb2.host);
@@ -607,20 +590,8 @@ mod tests {
         let rotator = Rotator::new(vec![make_test_set(4)]);
         let b64 = make_username_b64("unknown", 0, &[]);
         assert!(rotator
-            .next_proxy("unknown", 0, &b64, empty_metadata())
+            .next_proxy("unknown", 0, &b64, empty_affinity_params())
             .is_none());
-    }
-
-    #[test]
-    fn test_cheap_random_varies() {
-        let mut values = std::collections::HashSet::new();
-        for _ in 0..100 {
-            values.insert(crate::source::cheap_random());
-        }
-        assert!(
-            values.len() > 1,
-            "cheap_random should not return the same value every time"
-        );
     }
 
     #[test]
@@ -629,7 +600,7 @@ mod tests {
         let b64 = make_username_b64("test", 5, &[("session", "mysess")]);
 
         let p = rotator
-            .next_proxy("test", 5, &b64, empty_metadata())
+            .next_proxy("test", 5, &b64, empty_affinity_params())
             .unwrap();
 
         let info = rotator.get_session(&b64).unwrap();
@@ -646,7 +617,7 @@ mod tests {
         let b64 = make_username_b64("test", 0, &[("session", "nosess")]);
 
         rotator
-            .next_proxy("test", 0, &b64, empty_metadata())
+            .next_proxy("test", 0, &b64, empty_affinity_params())
             .unwrap();
         assert!(rotator.get_session(&b64).is_none());
     }
@@ -666,13 +637,13 @@ mod tests {
         let b64_noaff = make_username_b64("test", 0, &[("session", "noaff")]);
 
         rotator
-            .next_proxy("test", 5, &b64_a, empty_metadata())
+            .next_proxy("test", 5, &b64_a, empty_affinity_params())
             .unwrap();
         rotator
-            .next_proxy("test", 10, &b64_b, empty_metadata())
+            .next_proxy("test", 10, &b64_b, empty_affinity_params())
             .unwrap();
         rotator
-            .next_proxy("test", 0, &b64_noaff, empty_metadata())
+            .next_proxy("test", 0, &b64_noaff, empty_affinity_params())
             .unwrap(); // won't appear
 
         let sessions = rotator.list_sessions();
@@ -691,13 +662,13 @@ mod tests {
         let b64_c = make_username_b64("test", 5, &[("session", "c")]);
 
         rotator
-            .next_proxy("test", 5, &b64_a, empty_metadata())
+            .next_proxy("test", 5, &b64_a, empty_affinity_params())
             .unwrap();
         rotator
-            .next_proxy("test", 5, &b64_b, empty_metadata())
+            .next_proxy("test", 5, &b64_b, empty_affinity_params())
             .unwrap();
         rotator
-            .next_proxy("test", 5, &b64_c, empty_metadata())
+            .next_proxy("test", 5, &b64_c, empty_affinity_params())
             .unwrap();
 
         let mut sessions = rotator.list_sessions();
@@ -718,13 +689,13 @@ mod tests {
         let b64_c = make_username_b64("test", 5, &[("session", "c")]);
 
         rotator
-            .next_proxy("test", 5, &b64_a, empty_metadata())
+            .next_proxy("test", 5, &b64_a, empty_affinity_params())
             .unwrap();
         rotator
-            .next_proxy("test", 5, &b64_b, empty_metadata())
+            .next_proxy("test", 5, &b64_b, empty_affinity_params())
             .unwrap();
         rotator
-            .next_proxy("test", 5, &b64_c, empty_metadata())
+            .next_proxy("test", 5, &b64_c, empty_affinity_params())
             .unwrap();
 
         let mut sessions = rotator.list_sessions();
@@ -741,7 +712,7 @@ mod tests {
         let b64 = make_username_b64("test", 60, &[("session", "rot")]);
 
         let original = rotator
-            .next_proxy("test", 60, &b64, empty_metadata())
+            .next_proxy("test", 60, &b64, empty_affinity_params())
             .unwrap();
 
         let mut rotated_upstream = original.host.clone();
@@ -764,7 +735,7 @@ mod tests {
         let b64 = make_username_b64("test", 60, &[("session", "preserve")]);
 
         rotator
-            .next_proxy("test", 60, &b64, empty_metadata())
+            .next_proxy("test", 60, &b64, empty_affinity_params())
             .unwrap();
         let before = rotator.get_session(&b64).unwrap();
 
@@ -785,7 +756,7 @@ mod tests {
         let b64 = make_username_b64("test", 60, &[("session", "ttl")]);
 
         rotator
-            .next_proxy("test", 60, &b64, empty_metadata())
+            .next_proxy("test", 60, &b64, empty_affinity_params())
             .unwrap();
         let before = rotator.get_session(&b64).unwrap();
 

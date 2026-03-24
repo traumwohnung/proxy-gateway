@@ -8,8 +8,10 @@ TypeScript client: [`@1cedsoda/proxy-gateway-client`](https://github.com/1cedsod
 ## Repository layout
 
 ```
-proxy-gateway/          # Rust crate — the proxy server
-proxy-gateway-client/   # TypeScript/Node client package (@1cedsoda/proxy-gateway-client)
+proxy-gateway-core/                 # Shared types & traits (SourceProxy, ProxySource, AffinityParams, CountingPool)
+proxy-gateway-source-static-file/   # Static-file source — loads proxies from a text file
+proxy-gateway/                      # The proxy server binary (wires everything together)
+proxy-gateway-client/               # TypeScript/Node client package (@1cedsoda/proxy-gateway-client)
 ```
 
 ## Architecture
@@ -19,7 +21,7 @@ Client ──HTTP/CONNECT──→ proxy-gateway ──→ upstream proxy pool �
 ```
 
 - **No TLS termination** — raw bytes are relayed through CONNECT tunnels. The client's own TLS handshake reaches the destination untouched.
-- **Pluggable proxy sources** — each proxy set declares a `source_type` that controls how upstream endpoints are obtained. Currently supported: `static_file` (load from a text file). The source abstraction makes it straightforward to add API-based, algorithmically-generated, or other source types in the future.
+- **Pluggable proxy sources** — each proxy set declares a `source_type` that controls how upstream endpoints are obtained. Currently supported: `static_file` (load from a text file). Each source lives in its own crate (`proxy-gateway-source-*`) implementing the `ProxySource` trait from `proxy-gateway-core`, making it straightforward to add API-based, algorithmically-generated, or other source types.
 - Multiple **proxy sets** — each with its own source and rotation strategy.
 - **Least-used rotation** — requests go to the proxy with the lowest use count, with random tie-breaking among equally-used proxies.
 - **Session affinity** — pin a session to the same upstream proxy for a configurable duration (0–1440 minutes), encoded in the username.
@@ -89,7 +91,7 @@ The `Proxy-Authorization` username is a **base64-encoded JSON object** with thre
 |-------|------|-------------|
 | `set` | string | Proxy set name — must match a `[[proxy_set]] name` in config |
 | `minutes` | integer 0–1440 | Affinity duration. `0` = rotate every request, `1440` = 24 h |
-| `meta` | object | Arbitrary string metadata identifying the session (e.g. platform, user) |
+| `meta` | object | Affinity parameters identifying the session (e.g. platform, user). Values must be strings or numbers — booleans, nulls, arrays, and nested objects are rejected. |
 
 The base64 string itself is the affinity key — identical inputs always map to the same session.
 The password is always `x` (ignored by the server).
@@ -230,7 +232,7 @@ proxyUrl.password = "x";
 ## How it works
 
 1. Client sends an HTTP request or CONNECT tunnel with `Proxy-Authorization: Basic <base64>`
-2. The base64 string is decoded and parsed to extract `set`, `minutes`, and `meta`
+2. The base64 string is decoded and parsed to extract `set`, `minutes`, and `meta` (validated as `AffinityParams`)
 3. The proxy set's source is asked for an upstream endpoint (e.g. `static_file` uses least-used rotation)
 4. If `minutes > 0`, the base64 string is used as the affinity key — the same username always maps to the same proxy until the session expires
 5. Upstream credentials from the proxy entry are forwarded to the upstream
@@ -240,11 +242,25 @@ proxyUrl.password = "x";
 
 ## Adding a new source type
 
-The proxy source abstraction (`ProxySource` trait in `source.rs`) makes it easy to add new ways of obtaining upstream endpoints:
+The proxy source abstraction is split across crates so each source is independently testable and has its own dependencies:
 
-1. Add a config struct and a new variant to `ProxySourceConfig` in `source.rs`
-2. Create a struct that implements the `ProxySource` trait (`request_endpoint`, `describe`, `len`)
-3. Add a match arm in `ProxySourceConfig::from_type_and_table` and `build_source`
+- **`proxy-gateway-core`** defines the shared types and traits:
+  - `SourceProxy` — the common endpoint type (host, port, optional credentials).
+  - `AffinityParams` — validated affinity parameters from the username (`meta` object, string/number values only).
+  - `ProxySource` — the trait that sources implement: `get_source_proxy`, `get_source_proxy_force_rotate` (with default), and `describe`.
+  - `CountingPool<T>` — a generic least-used selection pool with `next` and `next_excluding`.
+- **Each source crate** (e.g. `proxy-gateway-source-static-file`) implements the trait and exposes a config struct + `build_source` factory.
+- **`proxy-gateway`** wires them together via `ProxySourceConfig` in `source.rs`.
+
+To add a new source:
+
+1. Create a new crate `proxy-gateway-source-<name>` that depends on `proxy-gateway-core`.
+2. Implement the `ProxySource` trait and expose a config struct + `build_source` factory.
+3. In `proxy-gateway/src/source.rs`, add the crate as a dependency, a new variant to `ProxySourceConfig`, and match arms in `from_type_and_table` and `build_source`.
+
+The `ProxySource` trait has two endpoint methods:
+- `get_source_proxy(&self, affinity_params)` — normal endpoint selection.
+- `get_source_proxy_force_rotate(&self, affinity_params, current)` — pick a *different* endpoint than `current`. Has a default implementation that falls back to `get_source_proxy`, so sources only override it if they can do better (e.g. the static-file source uses `CountingPool::next_excluding`).
 
 The gateway, API, and all routing code are source-agnostic — no changes needed there.
 

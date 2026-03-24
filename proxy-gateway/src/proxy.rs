@@ -1,4 +1,5 @@
 use crate::rotator::Rotator;
+use crate::source::AffinityParams;
 use crate::tunnel;
 
 use anyhow::Result;
@@ -25,11 +26,6 @@ pub async fn run_proxy(
 
     info!("Proxy gateway listening on {bind_addr}");
     info!("Available proxy sets: {:?}", rotator.set_names());
-    for name in rotator.set_names() {
-        if let Some(count) = rotator.set_info(name) {
-            info!("  set '{}': {} proxies", name, count);
-        }
-    }
     info!("Usage: Proxy-Authorization: Basic base64(<json>:)");
     info!("  The username is a single base64-encoded JSON object with three required keys:");
     info!("    meta    : flat object with string/number values");
@@ -93,15 +89,15 @@ struct ProxyAuth {
     /// Because it encodes all three fields, identical inputs always produce the
     /// same key, giving stable session affinity.
     username_b64: String,
-    /// The decoded `meta` sub-object.
-    metadata: serde_json::Map<String, serde_json::Value>,
+    /// The decoded `meta` sub-object (affinity parameters).
+    affinity_params: AffinityParams,
 }
 
 /// Public parsed fields from a username, returned by `parse_proxy_auth_value_for_verify`.
 pub struct ParsedUsername {
     pub set_name: String,
     pub affinity_minutes: u16,
-    pub metadata: serde_json::Map<String, serde_json::Value>,
+    pub affinity_params: AffinityParams,
 }
 
 /// Parse a raw base64 username string directly (no Basic auth wrapper).
@@ -125,7 +121,7 @@ pub fn parse_proxy_auth_value_for_verify(username_b64: &str) -> Result<ParsedUse
     Ok(ParsedUsername {
         set_name: auth.set_name,
         affinity_minutes: auth.affinity_minutes,
-        metadata: auth.metadata,
+        affinity_params: auth.affinity_params,
     })
 }
 
@@ -242,45 +238,16 @@ fn parse_proxy_auth_value(header_val: &str) -> Result<ProxyAuth, String> {
     }
 
     // Validate `meta`.
-    let meta_obj = match obj.get("meta") {
-        Some(serde_json::Value::Object(m)) => m.clone(),
+    let affinity_params = match obj.get("meta") {
+        Some(serde_json::Value::Object(m)) => AffinityParams::parse(m.clone())?,
         _ => return Err("'meta' must be a JSON object".to_string()),
     };
-    for (key, val) in &meta_obj {
-        match val {
-            serde_json::Value::String(_) | serde_json::Value::Number(_) => {}
-            serde_json::Value::Bool(_) => {
-                return Err(format!(
-                    "'meta.{}' has a boolean value. Only string and number values are allowed.",
-                    key
-                ));
-            }
-            serde_json::Value::Null => {
-                return Err(format!(
-                    "'meta.{}' has a null value. Only string and number values are allowed.",
-                    key
-                ));
-            }
-            serde_json::Value::Array(_) => {
-                return Err(format!(
-                    "'meta.{}' has an array value. Only string and number values are allowed.",
-                    key
-                ));
-            }
-            serde_json::Value::Object(_) => {
-                return Err(format!(
-                    "'meta.{}' has a nested object value. Only string and number values are allowed.",
-                    key
-                ));
-            }
-        }
-    }
 
     Ok(ProxyAuth {
         set_name,
         affinity_minutes: minutes,
         username_b64: b64.to_string(),
-        metadata: meta_obj,
+        affinity_params,
     })
 }
 
@@ -341,7 +308,7 @@ async fn handle_request_inner(
         &auth.set_name,
         auth.affinity_minutes,
         &auth.username_b64,
-        auth.metadata,
+        auth.affinity_params,
     ) {
         Some(p) => p,
         None => {
@@ -626,11 +593,11 @@ mod tests {
         assert_eq!(auth.set_name, "residential");
         assert_eq!(auth.affinity_minutes, 5);
         assert_eq!(
-            auth.metadata["app"],
+            auth.affinity_params["app"],
             serde_json::Value::String("myapp".to_string())
         );
         assert_eq!(
-            auth.metadata["user"],
+            auth.affinity_params["user"],
             serde_json::Value::String("alice".to_string())
         );
     }
@@ -640,7 +607,10 @@ mod tests {
         let u = make_username("datacenter", 10, r#"{"count":42,"name":"test"}"#);
         let auth = parse_proxy_auth_value(&auth_header(&u)).unwrap();
         assert_eq!(auth.affinity_minutes, 10);
-        assert_eq!(auth.metadata["count"], serde_json::Value::Number(42.into()));
+        assert_eq!(
+            auth.affinity_params["count"],
+            serde_json::Value::Number(42.into())
+        );
     }
 
     #[test]
@@ -648,7 +618,7 @@ mod tests {
         let u = make_username("residential", 0, "{}");
         let auth = parse_proxy_auth_value(&auth_header(&u)).unwrap();
         assert_eq!(auth.affinity_minutes, 0);
-        assert!(auth.metadata.is_empty());
+        assert!(auth.affinity_params.is_empty());
     }
 
     #[test]

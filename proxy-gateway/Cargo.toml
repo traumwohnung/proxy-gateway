@@ -16,21 +16,23 @@ name = "gen-openapi"
 path = "src/bin/gen_openapi.rs"
 
 [dependencies]
-tokio = { version = "1", features = ["full"] }
-hyper = { version = "1", features = ["full"] }
-hyper-util = { version = "0.1", features = ["full"] }
-http-body-util = "0.1"
-bytes = "1"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-base64 = "0.22"
-anyhow = "1"
-http = "1"
-serde = { version = "1", features = ["derive"] }
-toml = "0.8"
-dashmap = "6"
-serde_json = "1"
-utoipa = { version = "5", features = ["openapi_extensions"] }
+proxy-gateway-core.workspace = true
+proxy-gateway-source-static-file.workspace = true
+tokio.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+bytes.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+base64.workspace = true
+anyhow.workspace = true
+http.workspace = true
+serde.workspace = true
+toml.workspace = true
+dashmap.workspace = true
+serde_json.workspace = true
+utoipa.workspace = true
 
 [dev-dependencies]
-tempfile = "3.25.0"
+tempfile.workspace = true

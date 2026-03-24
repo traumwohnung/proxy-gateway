@@ -1,0 +1,13 @@
+[package]
+name = "proxy-gateway-source-static-file"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+proxy-gateway-core.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+serde_json.workspace = true
