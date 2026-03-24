@@ -14,9 +14,8 @@ use proxy_gateway_core::Country;
 /// [proxy_set.source]
 /// username     = "geonode-exampleuser"
 /// password_env = "GEONODE_PASSWORD"
-/// host         = "premium-residential.geonode.com"
-/// port         = 9000
-/// countries    = ["US", "DE"]  # optional, one picked randomly per request
+/// gateway      = "us"             # "fr" | "us" | "sg"
+/// countries    = ["US", "DE"]     # optional, one picked randomly per request
 /// ```
 ///
 /// **Sticky session**
@@ -24,12 +23,11 @@ use proxy_gateway_core::Country;
 /// [proxy_set.source]
 /// username     = "geonode-exampleuser"
 /// password_env = "GEONODE_PASSWORD"
-/// host         = "premium-residential.geonode.com"
-/// port         = 10000
+/// gateway      = "us"
 /// countries    = ["US"]
 ///
 /// [proxy_set.source.session]
-/// type     = "sticky"
+/// type      = "sticky"
 /// sess_time = 10  # minutes
 /// ```
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -40,17 +38,12 @@ pub struct GeonodeConfig {
     /// Environment variable name that holds the proxy password.
     pub password_env: String,
 
-    /// Proxy server hostname (e.g. `"premium-residential.geonode.com"`).
-    pub host: String,
+    /// Which geonode gateway to connect through.
+    pub gateway: GeonodeGateway,
 
-    /// Proxy server port.
-    ///
-    /// Port ranges by type:
-    /// - HTTP rotating:  9000–9010
-    /// - HTTP sticky:    10000–10900
-    /// - SOCKS5 rotating: 11000–11010
-    /// - SOCKS5 sticky:  12000–12010
-    pub port: u16,
+    /// Protocol to use (default: http).
+    #[serde(default)]
+    pub protocol: GeonodeProtocol,
 
     /// Target countries (multi-select). One is picked randomly per request.
     /// If empty, no country targeting is applied.
@@ -60,6 +53,54 @@ pub struct GeonodeConfig {
     /// Session configuration. If absent, rotating sessions are used.
     #[serde(default)]
     pub session: SessionConfig,
+}
+
+impl GeonodeConfig {
+    /// The upstream proxy host derived from the gateway.
+    pub fn host(&self) -> &'static str {
+        self.gateway.host()
+    }
+
+    /// The upstream proxy port derived from protocol and session type.
+    pub fn port(&self) -> u16 {
+        match (&self.protocol, &self.session) {
+            (GeonodeProtocol::Http, SessionConfig::Rotating) => 9000,
+            (GeonodeProtocol::Http, SessionConfig::Sticky(_)) => 10000,
+            (GeonodeProtocol::Socks5, SessionConfig::Rotating) => 11000,
+            (GeonodeProtocol::Socks5, SessionConfig::Sticky(_)) => 12000,
+        }
+    }
+}
+
+/// Geonode gateway location.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GeonodeGateway {
+    /// France — `proxy.geonode.io`
+    Fr,
+    /// United States — `us.premium-residential.geonode.com`
+    Us,
+    /// Singapore — `sg.premium-residential.geonode.com`
+    Sg,
+}
+
+impl GeonodeGateway {
+    pub fn host(self) -> &'static str {
+        match self {
+            Self::Fr => "proxy.geonode.io",
+            Self::Us => "us.premium-residential.geonode.com",
+            Self::Sg => "sg.premium-residential.geonode.com",
+        }
+    }
+}
+
+/// Protocol to use when connecting through the geonode gateway.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum GeonodeProtocol {
+    #[default]
+    Http,
+    Socks5,
 }
 
 /// Session behaviour for the upstream proxy.

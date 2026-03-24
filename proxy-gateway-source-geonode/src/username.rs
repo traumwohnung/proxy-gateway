@@ -110,8 +110,8 @@ mod tests {
         GeonodeConfig {
             username: "geonode-exampleuser".to_string(),
             password_env: "GEONODE_PASSWORD".to_string(),
-            host: "premium-residential.geonode.com".to_string(),
-            port: 9000,
+            gateway: crate::config::GeonodeGateway::Us,
+            protocol: crate::config::GeonodeProtocol::Http,
             countries,
             session,
         }

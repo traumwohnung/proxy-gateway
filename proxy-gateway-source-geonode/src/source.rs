@@ -23,8 +23,8 @@ impl GeonodeSource {
 
     fn make_proxy(&self, username: String) -> SourceProxy {
         SourceProxy {
-            host: self.config.host.clone(),
-            port: self.config.port,
+            host: self.config.host().to_string(),
+            port: self.config.port(),
             username: Some(username),
             password: Some(self.password.clone()),
         }
@@ -53,7 +53,7 @@ impl ProxySource for GeonodeSource {
                 .collect();
             parts.push(codes.join(",").to_ascii_uppercase());
         }
-        parts.push(format!("{}@{}:{}", self.config.username, self.config.host, self.config.port));
+        parts.push(format!("{}@{}:{}", self.config.username, self.config.host(), self.config.port()));
         parts.join(" ")
     }
 }
@@ -73,8 +73,8 @@ mod tests {
         GeonodeSource::from_config(&GeonodeConfig {
             username: "geonode-exampleuser".to_string(),
             password_env: "TEST_GN_PASS".to_string(),
-            host: "premium-residential.geonode.com".to_string(),
-            port: 9000,
+            gateway: crate::config::GeonodeGateway::Us,
+            protocol: crate::config::GeonodeProtocol::Http,
             countries,
             session,
         })
@@ -85,7 +85,7 @@ mod tests {
     async fn test_rotating_proxy_fields() {
         let source = make_source(SessionConfig::Rotating, vec![]);
         let proxy = source.get_source_proxy(&AffinityParams::new()).await.unwrap();
-        assert_eq!(proxy.host, "premium-residential.geonode.com");
+        assert_eq!(proxy.host, "us.premium-residential.geonode.com");
         assert_eq!(proxy.port, 9000);
         assert_eq!(proxy.password.as_deref(), Some("testpassword"));
         assert_eq!(proxy.username.as_deref(), Some("geonode-exampleuser"));
@@ -120,7 +120,7 @@ mod tests {
         let source = make_source(SessionConfig::Rotating, vec![proxy_gateway_core::Country::US, proxy_gateway_core::Country::DE]);
         assert_eq!(
             source.describe(),
-            "geonode US,DE geonode-exampleuser@premium-residential.geonode.com:9000"
+            "geonode US,DE geonode-exampleuser@us.premium-residential.geonode.com:9000"
         );
     }
 
@@ -130,8 +130,8 @@ mod tests {
         let cfg = GeonodeConfig {
             username: "user".to_string(),
             password_env: "NONEXISTENT_GN_VAR".to_string(),
-            host: "premium-residential.geonode.com".to_string(),
-            port: 9000,
+            gateway: crate::config::GeonodeGateway::Us,
+            protocol: crate::config::GeonodeProtocol::Http,
             countries: vec![],
             session: SessionConfig::Rotating,
         };
