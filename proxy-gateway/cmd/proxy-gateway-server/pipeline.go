@@ -31,7 +31,7 @@ func BuildServer(cfg *Config, configDir string) (*Server, error) {
 	}
 
 	router := core.HandlerFunc(func(ctx context.Context, req *core.Request) (*core.Result, error) {
-		set := core.Set(ctx)
+		set := getSet(ctx)
 		h, ok := sources[set]
 		if !ok {
 			return nil, fmt.Errorf("unknown proxy set %q", set)
@@ -39,7 +39,15 @@ func BuildServer(cfg *Config, configDir string) (*Server, error) {
 		return h.Resolve(ctx, req)
 	})
 
-	sessions := core.Session(router)
+	// KeyFunc for session affinity: use the pre-computed session key and TTL.
+	sessionKeyFn := func(ctx context.Context) core.SessionParams {
+		return core.SessionParams{
+			Key: getSessionKey(ctx),
+			TTL: getSessionTTL(ctx),
+		}
+	}
+
+	sessions := core.Session(sessionKeyFn, router)
 
 	pipeline := ParseJSONCreds(
 		core.Auth(

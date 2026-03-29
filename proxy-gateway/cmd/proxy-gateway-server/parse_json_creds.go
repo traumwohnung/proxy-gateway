@@ -4,19 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"proxy-gateway/core"
+	"proxy-gateway/utils"
 )
 
-// ParseJSONCreds is middleware that parses RawUsername as a JSON object and
-// populates context with Sub, Set, SessionTTL, Meta, SessionKey, and Password.
+// ParseJSONCreds parses RawUsername as a JSON object and populates context
+// with the server's domain concepts (identity, set, session TTL, metadata).
 //
 // Expected JSON format:
 //
 //	{"sub":"alice", "set":"residential", "minutes":5, "meta":{"app":"crawler"}}
-//
-// This is specific to our username encoding — other systems can write their
-// own credential-parsing middleware that populates context differently.
 func ParseJSONCreds(next core.Handler) core.Handler {
 	return core.HandlerFunc(func(ctx context.Context, req *core.Request) (*core.Result, error) {
 		if req.RawUsername == "" {
@@ -39,13 +38,13 @@ func ParseJSONCreds(next core.Handler) core.Handler {
 			return nil, fmt.Errorf("'set' must not be empty")
 		}
 
-		ctx = core.WithSub(ctx, parsed.Sub)
-		ctx = core.WithPassword(ctx, req.RawPassword)
-		ctx = core.WithSet(ctx, parsed.Set)
-		ctx = core.WithSessionTTL(ctx, parsed.Minutes)
-		ctx = core.WithMeta(ctx, core.Meta(parsed.Meta))
-		// Session key is sub+set — stable across requests even if minutes changes.
-		ctx = core.WithSessionKey(ctx, parsed.Sub+"\x00"+parsed.Set)
+		ctx = core.WithIdentity(ctx, parsed.Sub)
+		ctx = core.WithCredential(ctx, req.RawPassword)
+		ctx = withSet(ctx, parsed.Set)
+		ctx = withSessionTTL(ctx, time.Duration(parsed.Minutes)*time.Minute)
+		ctx = withMeta(ctx, utils.Meta(parsed.Meta))
+		// Session key: stable across TTL changes — keyed by identity+set only.
+		ctx = withSessionKey(ctx, parsed.Sub+"\x00"+parsed.Set)
 
 		return next.Resolve(ctx, req)
 	})

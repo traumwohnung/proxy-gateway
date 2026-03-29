@@ -133,7 +133,7 @@ func NewBottingtoolsSource(cfg *BottingtoolsConfig) (*BottingtoolsSource, error)
 
 // Resolve implements core.Handler.
 func (s *BottingtoolsSource) Resolve(ctx context.Context, _ *core.Request) (*core.Result, error) {
-	username := btBuildUsername(s.accountUser, s.product, core.GetMeta(ctx))
+	username := btBuildUsername(s.accountUser, s.product, GetMeta(ctx))
 	return core.Resolved(&core.Proxy{
 		Host:     s.host,
 		Port:     1337,
@@ -160,7 +160,7 @@ func (s *BottingtoolsSource) Describe() string {
 // Username building
 // ---------------------------------------------------------------------------
 
-func btBuildUsername(accountUser string, product BottingtoolsProductConfig, meta core.Meta) string {
+func btBuildUsername(accountUser string, product BottingtoolsProductConfig, meta Meta) string {
 	switch product.Type {
 	case "residential":
 		return btBuildResidential(accountUser, product.Residential, meta)
@@ -173,7 +173,7 @@ func btBuildUsername(accountUser string, product BottingtoolsProductConfig, meta
 	}
 }
 
-func btBuildResidential(accountUser string, cfg *BottingtoolsResidentialConfig, meta core.Meta) string {
+func btBuildResidential(accountUser string, cfg *BottingtoolsResidentialConfig, meta Meta) string {
 	parts := []string{fmt.Sprintf("%s_pool-custom_type-%s", accountUser, cfg.Quality.AsTypeStr())}
 	if country := btPickCountry(cfg.Countries); country != "" {
 		parts = append(parts, fmt.Sprintf("country-%s", strings.ToUpper(country.AsParamStr())))
@@ -191,7 +191,7 @@ func btBuildResidential(accountUser string, cfg *BottingtoolsResidentialConfig, 
 	return strings.Join(parts, "_")
 }
 
-func btBuildISP(accountUser string, cfg *BottingtoolsISPConfig, meta core.Meta) string {
+func btBuildISP(accountUser string, cfg *BottingtoolsISPConfig, meta Meta) string {
 	parts := []string{fmt.Sprintf("%s_pool-isp", accountUser)}
 	if country := btPickCountry(cfg.Countries); country != "" {
 		parts = append(parts, fmt.Sprintf("country-%s", country.AsParamStr()))
@@ -232,7 +232,7 @@ func btPickCountry(countries []Country) Country {
 	return countries[int(CheapRandom())%len(countries)]
 }
 
-func btSesstimeStr(meta core.Meta) string {
+func btSesstimeStr(meta Meta) string {
 	v := meta["sesstime"]
 	if v == nil {
 		return ""

@@ -16,7 +16,32 @@ type SessionInfo struct {
 	CreatedAt      time.Time `json:"created_at"`
 	NextRotationAt time.Time `json:"next_rotation_at"`
 	LastRotationAt time.Time `json:"last_rotation_at"`
-	Meta           Meta      `json:"metadata"`
+}
+
+// SessionParams holds the session key and TTL for a request.
+// Provided by the caller's KeyFunc.
+type SessionParams struct {
+	Key string        // stable affinity key (e.g. "alice\x00residential")
+	TTL time.Duration // how long to pin this session (0 = no affinity)
+}
+
+// KeyFunc extracts SessionParams from a context.
+// The framework does not define what the key means — callers provide this.
+//
+// Example (our server):
+//
+//	func sessionKey(ctx context.Context) core.SessionParams {
+//	    return core.SessionParams{
+//	        Key: myIdentity(ctx) + "\x00" + mySet(ctx),
+//	        TTL: time.Duration(myTTLMinutes(ctx)) * time.Minute,
+//	    }
+//	}
+type KeyFunc func(ctx context.Context) SessionParams
+
+// IdentityKey is a KeyFunc that uses Identity(ctx) as the session key
+// with no TTL (pass-through). Useful for simple deployments.
+func IdentityKey(ctx context.Context) SessionParams {
+	return SessionParams{Key: Identity(ctx)}
 }
 
 type stickyEntry struct {
@@ -26,30 +51,28 @@ type stickyEntry struct {
 	nextRotationAt time.Time
 	lastRotationAt time.Time
 	duration       time.Duration
-	meta           Meta
 }
 
 // SessionHandler wraps an inner Handler and provides sticky-session affinity.
-// Requests with the same SessionKey get the same upstream proxy for the
-// configured TTL.
+// Requests where KeyFunc returns the same Key get the same upstream proxy
+// for the configured TTL.
 type SessionHandler struct {
 	next     Handler
+	keyFn    KeyFunc
 	mu       sync.RWMutex
 	sessions map[string]*stickyEntry
 	nextID   atomic.Uint64
 }
 
-// Session creates a SessionHandler that pins sessions to the same upstream
-// for the TTL encoded in SessionTTL(ctx). If SessionTTL is 0 or SessionKey
-// is empty, the request passes straight through to next.
-// Session creates a SessionHandler that pins requests with the same SessionKey
-// to the same upstream proxy for the TTL encoded in SessionTTL(ctx).
-// If SessionTTL is 0 or SessionKey is empty, requests pass straight through.
+// Session creates a SessionHandler. keyFn extracts the session key and TTL
+// from each request's context. If keyFn returns an empty Key or zero TTL,
+// the request passes straight through to next.
 //
 // A cleanup goroutine is started automatically to prune expired sessions.
-func Session(next Handler) *SessionHandler {
+func Session(keyFn KeyFunc, next Handler) *SessionHandler {
 	s := &SessionHandler{
 		next:     next,
+		keyFn:    keyFn,
 		sessions: make(map[string]*stickyEntry),
 	}
 	go s.runCleanup()
@@ -58,17 +81,13 @@ func Session(next Handler) *SessionHandler {
 
 // Resolve implements Handler.
 func (s *SessionHandler) Resolve(ctx context.Context, req *Request) (*Result, error) {
-	sessionKey := SessionKey(ctx)
-	sessionTTL := SessionTTL(ctx)
-
-	if sessionTTL <= 0 || sessionKey == "" {
+	params := s.keyFn(ctx)
+	if params.TTL <= 0 || params.Key == "" {
 		return s.next.Resolve(ctx, req)
 	}
 
-	duration := time.Duration(sessionTTL) * time.Minute
-
 	s.mu.RLock()
-	entry, ok := s.sessions[sessionKey]
+	entry, ok := s.sessions[params.Key]
 	if ok && time.Since(entry.startedAt) < entry.duration {
 		p := entry.proxy
 		s.mu.RUnlock()
@@ -86,19 +105,18 @@ func (s *SessionHandler) Resolve(ctx context.Context, req *Request) (*Result, er
 		sessionID:      s.nextID.Add(1) - 1,
 		proxy:          *result.Proxy,
 		startedAt:      now,
-		nextRotationAt: now.Add(duration),
+		nextRotationAt: now.Add(params.TTL),
 		lastRotationAt: now,
-		duration:       duration,
-		meta:           GetMeta(ctx),
+		duration:       params.TTL,
 	}
 
 	s.mu.Lock()
-	if existing, ok := s.sessions[sessionKey]; ok && time.Since(existing.startedAt) < existing.duration {
+	if existing, ok := s.sessions[params.Key]; ok && time.Since(existing.startedAt) < existing.duration {
 		p := existing.proxy
 		s.mu.Unlock()
 		return Resolved(&p), nil
 	}
-	s.sessions[sessionKey] = newEntry
+	s.sessions[params.Key] = newEntry
 	s.mu.Unlock()
 
 	return result, nil
@@ -136,12 +154,8 @@ func (s *SessionHandler) ForceRotate(ctx context.Context, key string) (*SessionI
 		s.mu.RUnlock()
 		return nil, nil
 	}
-	meta := e.meta
 	duration := e.duration
 	s.mu.RUnlock()
-
-	ctx = WithSessionKey(ctx, key)
-	ctx = WithMeta(ctx, meta)
 
 	result, err := s.next.Resolve(ctx, &Request{})
 	if err != nil || result == nil || result.Proxy == nil {
@@ -186,6 +200,5 @@ func infoFrom(key string, e *stickyEntry) *SessionInfo {
 		CreatedAt:      e.startedAt,
 		NextRotationAt: e.nextRotationAt,
 		LastRotationAt: e.lastRotationAt,
-		Meta:           e.meta,
 	}
 }

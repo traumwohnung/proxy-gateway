@@ -7,9 +7,9 @@ import (
 
 func TestHandlerFunc(t *testing.T) {
 	h := HandlerFunc(func(ctx context.Context, _ *Request) (*Result, error) {
-		return Resolved(&Proxy{Host: "test", Port: 8080, Username: Sub(ctx)}), nil
+		return Resolved(&Proxy{Host: "test", Port: 8080, Username: Identity(ctx)}), nil
 	})
-	ctx := WithSub(context.Background(), "alice")
+	ctx := WithIdentity(context.Background(), "alice")
 	r, err := h.Resolve(ctx, &Request{})
 	if err != nil {
 		t.Fatal(err)

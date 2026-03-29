@@ -71,7 +71,8 @@ func (r RateLimitRule) windowDuration() time.Duration {
 // It injects a ConnTracker into the Result for connection-level tracking.
 type RateLimiter struct {
 	next   Handler
-	limits func(sub string) []RateLimitRule
+	keyFn  func(ctx context.Context) string
+	limits func(key string) []RateLimitRule
 	mu     sync.RWMutex
 	state  map[string]*userState
 }
@@ -79,22 +80,33 @@ type RateLimiter struct {
 // RateLimitOption configures a RateLimiter.
 type RateLimitOption func(*RateLimiter)
 
-// WithLimits sets a dynamic limit function.
-func WithLimits(fn func(sub string) []RateLimitRule) RateLimitOption {
+// WithLimits sets a dynamic limit function keyed by identity.
+func WithLimits(fn func(key string) []RateLimitRule) RateLimitOption {
 	return func(h *RateLimiter) { h.limits = fn }
 }
 
-// StaticLimits sets the same limits for all users.
+// StaticLimits sets the same limits for all callers.
 func StaticLimits(limits []RateLimitRule) RateLimitOption {
 	return WithLimits(func(_ string) []RateLimitRule { return limits })
 }
 
-// RateLimiting wraps next with rate limiting. Unlike the old ConnectionTracker
-// interface, this works at any position in the pipeline — it wraps
-// Result.ConnTracker so the gateway always sees the tracker.
-func RateLimit(next Handler, opts ...RateLimitOption) *RateLimiter {
+// RateLimit wraps next with rate limiting. keyFn extracts the bucket key
+// from context — typically core.Identity, but can be any string derivation.
+//
+// Rate limits are keyed by keyFn(ctx). If keyFn returns "" all traffic
+// shares a single anonymous bucket — limits apply globally.
+//
+// Example:
+//
+//	core.RateLimit(core.Identity, source,
+//	    core.StaticLimits([]core.RateLimitRule{
+//	        {Type: core.LimitConcurrentConnections, Timeframe: core.Realtime, Max: 10},
+//	    }),
+//	)
+func RateLimit(keyFn func(ctx context.Context) string, next Handler, opts ...RateLimitOption) *RateLimiter {
 	h := &RateLimiter{
 		next:  next,
+		keyFn: keyFn,
 		state: make(map[string]*userState),
 	}
 	for _, opt := range opts {
@@ -108,18 +120,14 @@ func RateLimit(next Handler, opts ...RateLimitOption) *RateLimiter {
 
 // Resolve implements Handler. It checks pre-connection limits,
 // delegates to the inner handler, then wraps the Result.ConnTracker.
-//
-// Rate limits are keyed by Sub(ctx). If no sub is set (empty string),
-// all traffic shares a single anonymous bucket — limits apply globally
-// across all unauthenticated connections.
 func (h *RateLimiter) Resolve(ctx context.Context, req *Request) (*Result, error) {
-	sub := Sub(ctx)
-	limits := h.limits(sub)
+	key := h.keyFn(ctx)
+	limits := h.limits(key)
 	if len(limits) == 0 {
 		return h.next.Resolve(ctx, req)
 	}
 
-	st := h.getState(sub, limits)
+	st := h.getState(key, limits)
 
 	// Check windowed limits before resolving.
 	if err := checkWindowedLimits(limits, st); err != nil {
@@ -132,7 +140,7 @@ func (h *RateLimiter) Resolve(ctx context.Context, req *Request) (*Result, error
 	}
 
 	// Create a ConnTracker for this connection and chain it with any inner one.
-	handle, err := h.openConnection(sub, limits, st)
+	handle, err := h.openConnection(key, limits, st)
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +150,7 @@ func (h *RateLimiter) Resolve(ctx context.Context, req *Request) (*Result, error
 }
 
 // openConnection creates a tracked ConnTracker, checking concurrent/total limits.
-func (h *RateLimiter) openConnection(sub string, limits []RateLimitRule, st *userState) (ConnTracker, error) {
+func (h *RateLimiter) openConnection(key string, limits []RateLimitRule, st *userState) (ConnTracker, error) {
 	for _, rl := range limits {
 		if rl.Type != LimitConcurrentConnections {
 			continue
@@ -150,7 +158,7 @@ func (h *RateLimiter) openConnection(sub string, limits []RateLimitRule, st *use
 		current := st.concurrent.Add(1)
 		if current > rl.Max {
 			st.concurrent.Add(-1)
-			return nil, fmt.Errorf("concurrent connection limit (%d) exceeded for %q", rl.Max, sub)
+			return nil, fmt.Errorf("concurrent connection limit (%d) exceeded for %q", rl.Max, key)
 		}
 	}
 
@@ -160,27 +168,27 @@ func (h *RateLimiter) openConnection(sub string, limits []RateLimitRule, st *use
 		}
 		if st.counters[i].Add(1) > rl.Max {
 			st.concurrent.Add(-1)
-			return nil, fmt.Errorf("total connection limit (%d) exceeded for %q", rl.Max, sub)
+			return nil, fmt.Errorf("total connection limit (%d) exceeded for %q", rl.Max, key)
 		}
 	}
 
 	return &rlConnTracker{limits: limits, state: st}, nil
 }
 
-func (h *RateLimiter) getState(sub string, limits []RateLimitRule) *userState {
+func (h *RateLimiter) getState(key string, limits []RateLimitRule) *userState {
 	h.mu.RLock()
-	st, ok := h.state[sub]
+	st, ok := h.state[key]
 	h.mu.RUnlock()
 	if ok {
 		return st
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if st, ok = h.state[sub]; ok {
+	if st, ok = h.state[key]; ok {
 		return st
 	}
 	st = newUserState(limits)
-	h.state[sub] = st
+	h.state[key] = st
 	return st
 }
 

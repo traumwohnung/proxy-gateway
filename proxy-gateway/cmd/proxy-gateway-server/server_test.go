@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"testing"
+	"time"
 
 	"proxy-gateway/core"
 	"proxy-gateway/utils"
@@ -19,13 +20,19 @@ var testSource = core.HandlerFunc(func(_ context.Context, _ *core.Request) (*cor
 
 func TestParseJSONCredsPopulatesContext(t *testing.T) {
 	h := ParseJSONCreds(core.HandlerFunc(func(ctx context.Context, _ *core.Request) (*core.Result, error) {
-		if core.Sub(ctx) != "alice" || core.Set(ctx) != "res" || core.SessionTTL(ctx) != 5 {
-			t.Fatalf("unexpected: sub=%q set=%q ttl=%d", core.Sub(ctx), core.Set(ctx), core.SessionTTL(ctx))
+		if core.Identity(ctx) != "alice" {
+			t.Fatalf("expected identity=alice, got %q", core.Identity(ctx))
 		}
-		if core.Password(ctx) != "s3cret" {
-			t.Fatalf("expected password=s3cret, got %q", core.Password(ctx))
+		if getSet(ctx) != "res" {
+			t.Fatalf("expected set=res, got %q", getSet(ctx))
 		}
-		if core.GetMeta(ctx).GetString("app") != "test" {
+		if getSessionTTL(ctx) != 5*time.Minute {
+			t.Fatalf("expected ttl=5m, got %v", getSessionTTL(ctx))
+		}
+		if core.Credential(ctx) != "s3cret" {
+			t.Fatalf("expected credential=s3cret, got %q", core.Credential(ctx))
+		}
+		if utils.GetMeta(ctx).GetString("app") != "test" {
 			t.Fatal("expected meta.app=test")
 		}
 		return core.Resolved(testProxy), nil
@@ -40,28 +47,27 @@ func TestParseJSONCredsPopulatesContext(t *testing.T) {
 	}
 }
 
-func TestParseJSONCredsSessionKeyIsSubPlusSet(t *testing.T) {
+func TestParseJSONCredsSessionKeyIsIdentityPlusSet(t *testing.T) {
 	var gotKey string
 	h := ParseJSONCreds(core.HandlerFunc(func(ctx context.Context, _ *core.Request) (*core.Result, error) {
-		gotKey = core.SessionKey(ctx)
+		gotKey = getSessionKey(ctx)
 		return core.Resolved(testProxy), nil
 	}))
-	req := &core.Request{
+	h.Resolve(context.Background(), &core.Request{
 		RawUsername: `{"sub":"alice","set":"res","minutes":5,"meta":{}}`,
 		RawPassword: "pw",
-	}
-	h.Resolve(context.Background(), req)
-	// Key must be stable: changing minutes should not change the key.
-	req2 := &core.Request{
-		RawUsername: `{"sub":"alice","set":"res","minutes":99,"meta":{}}`,
-		RawPassword: "pw",
-	}
+	})
+
 	var gotKey2 string
 	h2 := ParseJSONCreds(core.HandlerFunc(func(ctx context.Context, _ *core.Request) (*core.Result, error) {
-		gotKey2 = core.SessionKey(ctx)
+		gotKey2 = getSessionKey(ctx)
 		return core.Resolved(testProxy), nil
 	}))
-	h2.Resolve(context.Background(), req2)
+	// Different minutes — key must be the same.
+	h2.Resolve(context.Background(), &core.Request{
+		RawUsername: `{"sub":"alice","set":"res","minutes":99,"meta":{}}`,
+		RawPassword: "pw",
+	})
 	if gotKey != gotKey2 {
 		t.Fatalf("session key changed when only minutes changed: %q vs %q", gotKey, gotKey2)
 	}
@@ -124,8 +130,7 @@ func TestConfigAuthFallsBackToSubPassword(t *testing.T) {
 }
 
 func TestConfigAuthRequiresCredentials(t *testing.T) {
-	cfg := &Config{}
-	if _, err := cfg.authUsers(); err == nil {
+	if _, err := (&Config{}).authUsers(); err == nil {
 		t.Fatal("expected error when no auth configured")
 	}
 }
@@ -135,10 +140,17 @@ func TestConfigAuthRequiresCredentials(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestFullPipeline(t *testing.T) {
+	sessionKeyFn := func(ctx context.Context) core.SessionParams {
+		return core.SessionParams{
+			Key: getSessionKey(ctx),
+			TTL: getSessionTTL(ctx),
+		}
+	}
+
 	pipeline := ParseJSONCreds(
 		core.Auth(
 			utils.NewMapAuth(map[string]string{"alice": "pw"}),
-			core.Session(testSource),
+			core.Session(sessionKeyFn, testSource),
 		),
 	)
 
@@ -151,7 +163,7 @@ func TestFullPipeline(t *testing.T) {
 		t.Fatalf("expected proxy, got err=%v", err)
 	}
 
-	// Same sub+set → same sticky session.
+	// Same sub+set, different minutes → same sticky session.
 	r2, _ := pipeline.Resolve(context.Background(), &core.Request{
 		RawUsername: `{"sub":"alice","set":"test","minutes":99,"meta":{}}`,
 		RawPassword: "pw",
@@ -160,7 +172,7 @@ func TestFullPipeline(t *testing.T) {
 		t.Fatal("sticky should return same proxy regardless of minutes")
 	}
 
-	// Wrong password.
+	// Wrong credential.
 	if _, err := pipeline.Resolve(context.Background(), &core.Request{
 		RawUsername: `{"sub":"alice","set":"test","minutes":5,"meta":{}}`,
 		RawPassword: "wrong",

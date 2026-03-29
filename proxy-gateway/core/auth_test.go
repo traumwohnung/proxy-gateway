@@ -6,10 +6,10 @@ import (
 	"testing"
 )
 
-type stubAuth struct{ sub, pw string }
+type stubAuth struct{ identity, credential string }
 
-func (a *stubAuth) Authenticate(sub, password string) error {
-	if sub != a.sub || password != a.pw {
+func (a *stubAuth) Authenticate(identity, credential string) error {
+	if identity != a.identity || credential != a.credential {
 		return fmt.Errorf("invalid")
 	}
 	return nil
@@ -20,8 +20,8 @@ func TestAuthPassesOnValidCredentials(t *testing.T) {
 		return Resolved(&Proxy{Host: "upstream", Port: 8080}), nil
 	})
 	h := Auth(&stubAuth{"alice", "pw"}, source)
-	ctx := WithSub(context.Background(), "alice")
-	ctx = WithPassword(ctx, "pw")
+	ctx := WithIdentity(context.Background(), "alice")
+	ctx = WithCredential(ctx, "pw")
 	r, err := h.Resolve(ctx, &Request{})
 	if err != nil || r == nil || r.Proxy == nil {
 		t.Fatalf("expected proxy, got err=%v", err)
@@ -33,10 +33,10 @@ func TestAuthRejectsInvalidCredentials(t *testing.T) {
 		return Resolved(&Proxy{Host: "upstream", Port: 8080}), nil
 	})
 	h := Auth(&stubAuth{"alice", "pw"}, source)
-	ctx := WithSub(context.Background(), "alice")
-	ctx = WithPassword(ctx, "wrong")
+	ctx := WithIdentity(context.Background(), "alice")
+	ctx = WithCredential(ctx, "wrong")
 	_, err := h.Resolve(ctx, &Request{})
 	if err == nil {
-		t.Fatal("expected error for wrong password")
+		t.Fatal("expected error for wrong credential")
 	}
 }

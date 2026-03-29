@@ -13,12 +13,12 @@ func NewMapAuth(users map[string]string) *MapAuth {
 }
 
 // Authenticate implements core.Authenticator.
-func (a *MapAuth) Authenticate(sub, password string) error {
-	expected, ok := a.users[sub]
+func (a *MapAuth) Authenticate(identity, credential string) error {
+	expected, ok := a.users[identity]
 	if !ok {
-		return fmt.Errorf("unknown user %q", sub)
+		return fmt.Errorf("unknown identity %q", identity)
 	}
-	if password != expected {
+	if credential != expected {
 		return fmt.Errorf("invalid credentials")
 	}
 	return nil

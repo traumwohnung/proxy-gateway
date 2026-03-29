@@ -2,15 +2,6 @@ package core
 
 import "context"
 
-// Meta is a flat map of string/number metadata values.
-type Meta map[string]interface{}
-
-// GetString returns the string value for key, or "".
-func (m Meta) GetString(key string) string {
-	v, _ := m[key].(string)
-	return v
-}
-
 // TLSState holds MITM TLS interception state.
 type TLSState struct {
 	Broken     bool   // TLS has been terminated by MITM
@@ -18,79 +9,47 @@ type TLSState struct {
 }
 
 // ---------------------------------------------------------------------------
-// Context helpers — middleware sets these, handlers read them
+// Context helpers — the framework's own context keys
 // ---------------------------------------------------------------------------
 
 type ctxKey int
 
 const (
-	ctxSub ctxKey = iota
-	ctxPassword
-	ctxSet
-	ctxMeta
-	ctxSessionKey
-	ctxSessionTTL
+	ctxIdentity ctxKey = iota
+	ctxCredential
 	ctxTLSState
 )
 
-func WithSub(ctx context.Context, sub string) context.Context {
-	return context.WithValue(ctx, ctxSub, sub)
+// WithIdentity stores the caller's identity in context.
+// Used by Auth to validate credentials and by RateLimit/Session as the
+// default bucket/affinity key.
+func WithIdentity(ctx context.Context, identity string) context.Context {
+	return context.WithValue(ctx, ctxIdentity, identity)
 }
 
-func Sub(ctx context.Context) string {
-	v, _ := ctx.Value(ctxSub).(string)
+// Identity reads the caller's identity from context.
+func Identity(ctx context.Context) string {
+	v, _ := ctx.Value(ctxIdentity).(string)
 	return v
 }
 
-func WithPassword(ctx context.Context, pw string) context.Context {
-	return context.WithValue(ctx, ctxPassword, pw)
+// WithCredential stores the caller's credential (password/token) in context.
+func WithCredential(ctx context.Context, credential string) context.Context {
+	return context.WithValue(ctx, ctxCredential, credential)
 }
 
-func Password(ctx context.Context) string {
-	v, _ := ctx.Value(ctxPassword).(string)
+// Credential reads the caller's credential from context.
+func Credential(ctx context.Context) string {
+	v, _ := ctx.Value(ctxCredential).(string)
 	return v
 }
 
-func WithSet(ctx context.Context, set string) context.Context {
-	return context.WithValue(ctx, ctxSet, set)
-}
-
-func Set(ctx context.Context) string {
-	v, _ := ctx.Value(ctxSet).(string)
-	return v
-}
-
-func WithMeta(ctx context.Context, m Meta) context.Context {
-	return context.WithValue(ctx, ctxMeta, m)
-}
-
-func GetMeta(ctx context.Context) Meta {
-	v, _ := ctx.Value(ctxMeta).(Meta)
-	return v
-}
-
-func WithSessionKey(ctx context.Context, key string) context.Context {
-	return context.WithValue(ctx, ctxSessionKey, key)
-}
-
-func SessionKey(ctx context.Context) string {
-	v, _ := ctx.Value(ctxSessionKey).(string)
-	return v
-}
-
-func WithSessionTTL(ctx context.Context, minutes int) context.Context {
-	return context.WithValue(ctx, ctxSessionTTL, minutes)
-}
-
-func SessionTTL(ctx context.Context) int {
-	v, _ := ctx.Value(ctxSessionTTL).(int)
-	return v
-}
-
+// WithTLSState stores TLS interception state in context.
 func WithTLSState(ctx context.Context, state TLSState) context.Context {
 	return context.WithValue(ctx, ctxTLSState, state)
 }
 
+// GetTLSState reads TLS interception state from context.
 func GetTLSState(ctx context.Context) TLSState {
 	v, _ := ctx.Value(ctxTLSState).(TLSState)
 	return v

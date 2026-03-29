@@ -3,7 +3,15 @@ package core
 import (
 	"context"
 	"testing"
+	"time"
 )
+
+// testKeyFn returns a SessionParams using identity as key with a fixed TTL.
+func testKeyFn(ttl time.Duration) KeyFunc {
+	return func(ctx context.Context) SessionParams {
+		return SessionParams{Key: Identity(ctx), TTL: ttl}
+	}
+}
 
 func TestStickyAffinityPins(t *testing.T) {
 	counter := 0
@@ -11,9 +19,8 @@ func TestStickyAffinityPins(t *testing.T) {
 		counter++
 		return Resolved(&Proxy{Host: "host", Port: uint16(counter)}), nil
 	})
-	s := Session(source)
-	ctx := WithSessionKey(context.Background(), "key1")
-	ctx = WithSessionTTL(ctx, 5)
+	s := Session(testKeyFn(5*time.Minute), source)
+	ctx := WithIdentity(context.Background(), "alice")
 	r1, _ := s.Resolve(ctx, &Request{})
 	r2, _ := s.Resolve(ctx, &Request{})
 	if r1.Proxy.Port != r2.Proxy.Port {
@@ -27,9 +34,9 @@ func TestStickyZeroTTLPassesThrough(t *testing.T) {
 		counter++
 		return Resolved(&Proxy{Host: "host", Port: uint16(counter)}), nil
 	})
-	s := Session(source)
-	ctx := WithSessionKey(context.Background(), "key1")
-	// SessionTTL defaults to 0 — no affinity
+	// Zero TTL = no affinity.
+	s := Session(func(_ context.Context) SessionParams { return SessionParams{} }, source)
+	ctx := WithIdentity(context.Background(), "alice")
 	r1, _ := s.Resolve(ctx, &Request{})
 	r2, _ := s.Resolve(ctx, &Request{})
 	if r1.Proxy.Port == r2.Proxy.Port {
@@ -41,11 +48,11 @@ func TestStickyListSessions(t *testing.T) {
 	source := HandlerFunc(func(_ context.Context, _ *Request) (*Result, error) {
 		return Resolved(&Proxy{Host: "upstream", Port: 8080}), nil
 	})
-	s := Session(source)
-	ctx := context.Background()
-	s.Resolve(WithSessionTTL(WithSessionKey(ctx, "a"), 5), &Request{})
-	s.Resolve(WithSessionTTL(WithSessionKey(ctx, "b"), 5), &Request{})
-	s.Resolve(WithSessionKey(ctx, "c"), &Request{}) // no TTL
+	s := Session(testKeyFn(5*time.Minute), source)
+	s.Resolve(WithIdentity(context.Background(), "a"), &Request{})
+	s.Resolve(WithIdentity(context.Background(), "b"), &Request{})
+	// No key = no affinity.
+	s.Resolve(context.Background(), &Request{})
 	if len(s.ListSessions()) != 2 {
 		t.Fatalf("expected 2 sessions, got %d", len(s.ListSessions()))
 	}
@@ -57,24 +64,24 @@ func TestStickyForceRotate(t *testing.T) {
 		counter++
 		return Resolved(&Proxy{Host: "host", Port: uint16(counter)}), nil
 	})
-	s := Session(source)
-	ctx := WithSessionTTL(WithSessionKey(context.Background(), "k"), 60)
+	s := Session(testKeyFn(60*time.Minute), source)
+	ctx := WithIdentity(context.Background(), "alice")
 	s.Resolve(ctx, &Request{})
-	before := s.GetSession("k")
-	info, _ := s.ForceRotate(context.Background(), "k")
+	before := s.GetSession("alice")
+	info, _ := s.ForceRotate(context.Background(), "alice")
 	if info == nil {
 		t.Fatal("expected session info")
 	}
 	if info.SessionID != before.SessionID {
-		t.Fatal("session ID should be preserved")
+		t.Fatal("session ID should be preserved after rotate")
 	}
 }
 
 func TestDirectLibraryUsage(t *testing.T) {
 	source := HandlerFunc(func(ctx context.Context, _ *Request) (*Result, error) {
-		return Resolved(&Proxy{Host: "proxy-" + Set(ctx), Port: 8080}), nil
+		return Resolved(&Proxy{Host: "proxy-" + Identity(ctx), Port: 8080}), nil
 	})
-	ctx := WithSet(context.Background(), "residential")
+	ctx := WithIdentity(context.Background(), "residential")
 	r, err := source.Resolve(ctx, &Request{})
 	if err != nil || r.Proxy.Host != "proxy-residential" {
 		t.Fatalf("unexpected: err=%v proxy=%+v", err, r)
