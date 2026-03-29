@@ -1,15 +1,14 @@
 // Package gateway provides HTTP and SOCKS5 proxy servers that delegate
 // proxy resolution to a core.Handler pipeline.
 //
-// Downstream (client→gateway) supports both HTTP and SOCKS5 protocols.
-// Upstream (gateway→proxy) supports both HTTP CONNECT and SOCKS5, determined
-// by the Protocol field of the core.Proxy returned by the handler.
-// The two sides are independent — HTTP→SOCKS5 and SOCKS5→HTTP both work.
+// The gateway only extracts raw credentials from the transport protocol
+// (Basic auth username+password, SOCKS5 username+password) and puts them
+// into Request.RawUsername and Request.RawPassword. It does NOT interpret
+// the username format — that's the responsibility of middleware.
 package gateway
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
@@ -32,7 +31,8 @@ func HTTPHandler(handler core.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
 
-		req, err := parseBasicAuth(r.Header.Get("Proxy-Authorization"))
+		// Extract raw credentials from Basic auth — no parsing.
+		rawUsername, rawPassword, err := extractBasicAuth(r.Header.Get("Proxy-Authorization"))
 		if err != nil {
 			slog.Warn("auth error", "method", r.Method, "uri", r.RequestURI, "client", clientIP, "err", err)
 			w.Header().Set("Proxy-Authenticate", `Basic realm="proxy-gateway"`)
@@ -40,9 +40,15 @@ func HTTPHandler(handler core.Handler) http.Handler {
 			return
 		}
 
+		req := &core.Request{
+			RawUsername: rawUsername,
+			RawPassword: rawPassword,
+			Target:      r.Host,
+		}
+
 		proxy, err := handler.Resolve(r.Context(), req)
 		if err != nil {
-			slog.Warn("resolve error", "sub", req.Sub, "set", req.Set, "err", err)
+			slog.Warn("resolve error", "client", clientIP, "err", err)
 			http.Error(w, err.Error(), http.StatusForbidden)
 			return
 		}
@@ -54,7 +60,6 @@ func HTTPHandler(handler core.Handler) http.Handler {
 		slog.Info("routing",
 			"method", r.Method,
 			"uri", r.RequestURI,
-			"sub", req.Sub,
 			"upstream", fmt.Sprintf("%s:%d", proxy.Host, proxy.Port),
 			"upstream_proto", proxy.GetProtocol(),
 			"client", clientIP,
@@ -78,55 +83,23 @@ func HTTPHandler(handler core.Handler) http.Handler {
 	})
 }
 
-// ---------------------------------------------------------------------------
-// Basic auth → core.Request
-// ---------------------------------------------------------------------------
-
-func parseBasicAuth(headerVal string) (*core.Request, error) {
+// extractBasicAuth decodes "Basic <b64>" into raw username and password
+// without interpreting the username content at all.
+func extractBasicAuth(headerVal string) (username, password string, err error) {
 	b64, ok := strings.CutPrefix(headerVal, "Basic ")
 	if !ok {
-		return nil, fmt.Errorf("Proxy-Authorization must use Basic scheme")
+		return "", "", fmt.Errorf("Proxy-Authorization must use Basic scheme")
 	}
 	decoded, err := base64.StdEncoding.DecodeString(b64)
 	if err != nil {
-		return nil, fmt.Errorf("invalid base64 in Proxy-Authorization")
+		return "", "", fmt.Errorf("invalid base64 in Proxy-Authorization")
 	}
-
 	raw := string(decoded)
 	colonIdx := strings.LastIndex(raw, ":")
 	if colonIdx < 0 {
-		return nil, fmt.Errorf("invalid Basic credentials: missing colon separator")
+		return raw, "", nil
 	}
-	usernameJSON := raw[:colonIdx]
-	password := raw[colonIdx+1:]
-	if usernameJSON == "" {
-		return nil, fmt.Errorf("empty username in Proxy-Authorization")
-	}
-
-	var parsed struct {
-		Sub     string                 `json:"sub"`
-		Set     string                 `json:"set"`
-		Minutes int                    `json:"minutes"`
-		Meta    map[string]interface{} `json:"meta"`
-	}
-	if err := json.Unmarshal([]byte(usernameJSON), &parsed); err != nil {
-		return nil, fmt.Errorf("username is not valid JSON: %w", err)
-	}
-	if parsed.Sub == "" {
-		return nil, fmt.Errorf("'sub' must not be empty")
-	}
-	if parsed.Set == "" {
-		return nil, fmt.Errorf("'set' must not be empty")
-	}
-
-	return &core.Request{
-		Sub:        parsed.Sub,
-		Password:   password,
-		Set:        parsed.Set,
-		Meta:       core.Meta(parsed.Meta),
-		SessionKey: b64,
-		SessionTTL: parsed.Minutes,
-	}, nil
+	return raw[:colonIdx], raw[colonIdx+1:], nil
 }
 
 // ---------------------------------------------------------------------------
@@ -153,7 +126,6 @@ func serveConnect(w http.ResponseWriter, r *http.Request, proxy *core.Proxy, han
 	}
 	defer clientConn.Close()
 
-	// Dial upstream using the proxy's protocol (HTTP CONNECT or SOCKS5).
 	upstreamConn, err := dialUpstream(proxy, r.Host)
 	if err != nil {
 		slog.Error("upstream dial failed", "err", err)

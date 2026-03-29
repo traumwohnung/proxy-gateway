@@ -79,12 +79,16 @@ func BuildPipeline(cfg *Config, configDir string) (core.Handler, *middleware.Sti
 	})
 
 	sticky := middleware.Sticky(router)
-	auth := middleware.Auth(
-		middleware.NewSimpleAuth(cfg.AuthSub, cfg.AuthPassword),
-		sticky,
+
+	// Pipeline: parse JSON credentials → authenticate → sticky sessions → route to source
+	pipeline := middleware.ParseJSONCreds(
+		middleware.Auth(
+			middleware.NewSimpleAuth(cfg.AuthSub, cfg.AuthPassword),
+			sticky,
+		),
 	)
 
-	return auth, sticky, nil
+	return pipeline, sticky, nil
 }
 
 func buildSource(sourceType string, rawSource map[string]interface{}, configDir string) (core.Handler, error) {

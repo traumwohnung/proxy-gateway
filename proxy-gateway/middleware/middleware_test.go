@@ -167,7 +167,59 @@ func TestRateLimitBandwidthMidConnection(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Pipeline composition
+// ParseJSONCreds
+// ---------------------------------------------------------------------------
+
+func TestParseJSONCredsPopulatesFields(t *testing.T) {
+	h := ParseJSONCreds(core.HandlerFunc(func(_ context.Context, req *core.Request) (*core.Proxy, error) {
+		if req.Sub != "alice" || req.Set != "res" || req.SessionTTL != 5 {
+			t.Fatalf("unexpected parsed fields: sub=%q set=%q ttl=%d", req.Sub, req.Set, req.SessionTTL)
+		}
+		if req.Password != "s3cret" {
+			t.Fatalf("expected password=s3cret, got %q", req.Password)
+		}
+		if req.Meta.GetString("app") != "test" {
+			t.Fatalf("expected meta.app=test")
+		}
+		return &core.Proxy{Host: "ok"}, nil
+	}))
+
+	req := &core.Request{
+		RawUsername: `{"sub":"alice","set":"res","minutes":5,"meta":{"app":"test"}}`,
+		RawPassword: "s3cret",
+	}
+	p, err := h.Resolve(context.Background(), req)
+	if err != nil || p.Host != "ok" {
+		t.Fatalf("unexpected: err=%v proxy=%+v", err, p)
+	}
+}
+
+func TestParseJSONCredsRejectsEmptyUsername(t *testing.T) {
+	h := ParseJSONCreds(testSource)
+	_, err := h.Resolve(context.Background(), &core.Request{})
+	if err == nil {
+		t.Fatal("expected error for empty username")
+	}
+}
+
+func TestParseJSONCredsRejectsInvalidJSON(t *testing.T) {
+	h := ParseJSONCreds(testSource)
+	_, err := h.Resolve(context.Background(), &core.Request{RawUsername: "notjson"})
+	if err == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+}
+
+func TestParseJSONCredsRejectsMissingSub(t *testing.T) {
+	h := ParseJSONCreds(testSource)
+	_, err := h.Resolve(context.Background(), &core.Request{RawUsername: `{"set":"res","minutes":0,"meta":{}}`})
+	if err == nil {
+		t.Fatal("expected error for missing sub")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline composition with ParseJSONCreds
 // ---------------------------------------------------------------------------
 
 func TestFullPipeline(t *testing.T) {
@@ -175,26 +227,38 @@ func TestFullPipeline(t *testing.T) {
 		return &core.Proxy{Host: "upstream", Port: 8080}, nil
 	})
 
-	pipeline := Auth(
-		NewSimpleAuth("alice", "pw"),
-		Sticky(source),
+	// ParseJSONCreds → Auth → Sticky → Source
+	pipeline := ParseJSONCreds(
+		Auth(
+			NewSimpleAuth("alice", "pw"),
+			Sticky(source),
+		),
 	)
 
-	// Valid auth + sticky session.
-	req := &core.Request{Sub: "alice", Password: "pw", Set: "test", SessionKey: "s1", SessionTTL: 5}
+	// Valid request as the gateway would send it.
+	req := &core.Request{
+		RawUsername: `{"sub":"alice","set":"test","minutes":5,"meta":{}}`,
+		RawPassword: "pw",
+	}
 	p, err := pipeline.Resolve(context.Background(), req)
 	if err != nil || p == nil {
 		t.Fatalf("expected proxy, got err=%v", err)
 	}
 
-	// Same session key → same proxy.
-	p2, _ := pipeline.Resolve(context.Background(), req)
+	// Same raw username → same sticky session.
+	p2, _ := pipeline.Resolve(context.Background(), &core.Request{
+		RawUsername: `{"sub":"alice","set":"test","minutes":5,"meta":{}}`,
+		RawPassword: "pw",
+	})
 	if p2.Port != p.Port {
 		t.Fatal("sticky should return same proxy")
 	}
 
-	// Bad auth.
-	_, err = pipeline.Resolve(context.Background(), &core.Request{Sub: "alice", Password: "wrong"})
+	// Bad password.
+	_, err = pipeline.Resolve(context.Background(), &core.Request{
+		RawUsername: `{"sub":"alice","set":"test","minutes":5,"meta":{}}`,
+		RawPassword: "wrong",
+	})
 	if err == nil {
 		t.Fatal("expected auth error")
 	}
