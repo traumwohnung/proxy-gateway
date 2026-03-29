@@ -111,7 +111,7 @@ func (s *GeonodeSource) Resolve(_ context.Context, _ *core.Request) (*core.Resul
 	if s.config.Protocol == GeonodeProtocolSocks5 {
 		proto = core.ProtocolSOCKS5
 	}
-	return core.ProxyResult(&core.Proxy{
+	return core.Resolved(&core.Proxy{
 		Host:     s.config.Host(),
 		Port:     s.config.Port(),
 		Username: gnBuildUsername(&s.config),

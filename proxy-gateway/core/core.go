@@ -75,9 +75,9 @@ type Result struct {
 	// response) or wants to reject.
 	Proxy *Proxy
 
-	// ConnHandle tracks the connection lifecycle (bytes, limits).
+	// ConnTracker tracks the connection lifecycle (bytes, limits).
 	// May be nil if no rate limiting is in the pipeline.
-	ConnHandle ConnHandle
+	ConnTracker ConnTracker
 
 	// ResponseHook is called after the upstream responds, before sending
 	// to the client. Multiple middleware can chain hooks.
@@ -94,8 +94,8 @@ type Result struct {
 	UpstreamConn net.Conn
 }
 
-// ProxyResult is a convenience for handlers that just return a proxy.
-func ProxyResult(p *Proxy) *Result {
+// Resolved is a convenience for handlers that just return a proxy.
+func Resolved(p *Proxy) *Result {
 	return &Result{Proxy: p}
 }
 
@@ -120,8 +120,8 @@ type Proxy struct {
 	Protocol Protocol
 }
 
-// GetProtocol returns the protocol, defaulting to HTTP if empty.
-func (p *Proxy) GetProtocol() Protocol {
+// Proto returns the protocol, defaulting to HTTP if empty.
+func (p *Proxy) Proto() Protocol {
 	if p.Protocol == "" {
 		return ProtocolHTTP
 	}
@@ -129,18 +129,18 @@ func (p *Proxy) GetProtocol() Protocol {
 }
 
 // ---------------------------------------------------------------------------
-// ConnHandle — connection lifecycle tracking
+// ConnTracker — connection lifecycle tracking
 // ---------------------------------------------------------------------------
 
-// ConnHandle tracks a single active proxied connection.
-type ConnHandle interface {
+// ConnTracker tracks a single active proxied connection.
+type ConnTracker interface {
 	RecordTraffic(upstream bool, delta int64, cancel func())
 	Close(sentTotal, receivedTotal int64)
 }
 
-// ChainHandles returns a ConnHandle that delegates to both a and b.
+// ChainTrackers returns a ConnTracker that delegates to both a and b.
 // Either may be nil (the non-nil one is returned as-is).
-func ChainHandles(a, b ConnHandle) ConnHandle {
+func ChainTrackers(a, b ConnTracker) ConnTracker {
 	if a == nil {
 		return b
 	}
@@ -150,7 +150,7 @@ func ChainHandles(a, b ConnHandle) ConnHandle {
 	return &chainedHandle{a, b}
 }
 
-type chainedHandle struct{ a, b ConnHandle }
+type chainedHandle struct{ a, b ConnTracker }
 
 func (c *chainedHandle) RecordTraffic(upstream bool, delta int64, cancel func()) {
 	c.a.RecordTraffic(upstream, delta, cancel)

@@ -15,8 +15,8 @@ func (stubUpstream) Dial(_ context.Context, _ *Proxy, _ string) (net.Conn, error
 	return nil, fmt.Errorf("stub: not dialing")
 }
 
-func TestGenerateCA(t *testing.T) {
-	ca, err := GenerateCA()
+func TestNewCA(t *testing.T) {
+	ca, err := NewCA()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,11 +29,11 @@ func TestGenerateCA(t *testing.T) {
 }
 
 func TestMITMPassesThroughWhenNoConn(t *testing.T) {
-	ca, _ := GenerateCA()
+	ca, _ := NewCA()
 	called := false
 	inner := HandlerFunc(func(_ context.Context, _ *Request) (*Result, error) {
 		called = true
-		return ProxyResult(&Proxy{Host: "upstream", Port: 8080}), nil
+		return Resolved(&Proxy{Host: "upstream", Port: 8080}), nil
 	})
 
 	h := MITM(ca, stubUpstream{}, inner)
@@ -51,11 +51,11 @@ func TestMITMPassesThroughWhenNoConn(t *testing.T) {
 }
 
 func TestMITMPassesThroughWhenTLSAlreadyBroken(t *testing.T) {
-	ca, _ := GenerateCA()
+	ca, _ := NewCA()
 	called := false
 	inner := HandlerFunc(func(_ context.Context, _ *Request) (*Result, error) {
 		called = true
-		return ProxyResult(&Proxy{Host: "upstream", Port: 8080}), nil
+		return Resolved(&Proxy{Host: "upstream", Port: 8080}), nil
 	})
 
 	h := MITM(ca, stubUpstream{}, inner)
@@ -72,7 +72,7 @@ func TestBlockingMiddlewareWorksWithHTTPRequest(t *testing.T) {
 		if req.HTTPRequest != nil && req.HTTPRequest.URL.Host == "blocked.com" {
 			return nil, fmt.Errorf("blocked")
 		}
-		return ProxyResult(&Proxy{Host: "upstream", Port: 8080}), nil
+		return Resolved(&Proxy{Host: "upstream", Port: 8080}), nil
 	})
 
 	httpReq, _ := http.NewRequest("GET", "https://blocked.com/page", nil)

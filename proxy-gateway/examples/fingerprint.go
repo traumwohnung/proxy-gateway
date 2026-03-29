@@ -27,13 +27,13 @@ import (
 //
 // Usage:
 //
-//	ca, _ := core.GenerateCA()
+//	ca, _ := core.NewCA()
 //	pipeline := core.Auth(auth,
 //	    examples.Fingerprint(ca, "chrome-latest",
-//	        core.Sticky(source),
+//	        core.Session(source),
 //	    ),
 //	)
-//	gateway.Run(":8100", pipeline)
+//	core.ListenHTTP(":8100", pipeline)
 func Fingerprint(ca tls.Certificate, preset string, inner core.Handler) core.Handler {
 	caCert, err := x509.ParseCertificate(ca.Certificate[0])
 	if err != nil {
@@ -66,7 +66,7 @@ func (h *fingerprintHandler) Resolve(ctx context.Context, req *core.Request) (*c
 	}
 
 	host := targetHost(req.Target)
-	cert := h.cache.GetOrCreate(host, h.caCert, &h.ca)
+	cert := h.cache.Get(host, h.caCert, &h.ca)
 
 	tlsConn := tls.Server(req.Conn, &tls.Config{
 		Certificates: []tls.Certificate{*cert},
@@ -132,7 +132,7 @@ func (h *fingerprintHandler) Resolve(ctx context.Context, req *core.Request) (*c
 
 func forwardWithFingerprint(ctx context.Context, httpReq *http.Request, host string, proxy *core.Proxy, preset string) (*http.Response, error) {
 	var proxyURL string
-	switch proxy.GetProtocol() {
+	switch proxy.Proto() {
 	case core.ProtocolSOCKS5:
 		if proxy.Username != "" {
 			proxyURL = fmt.Sprintf("socks5://%s:%s@%s:%d", proxy.Username, proxy.Password, proxy.Host, proxy.Port)

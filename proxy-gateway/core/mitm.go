@@ -29,11 +29,11 @@ import (
 //
 // Usage:
 //
-//	ca, _ := middleware.GenerateCA()
-//	upstream := gateway.DefaultUpstream()   // or custom
+//	ca, _ := middleware.NewCA()
+//	upstream := gateway.AutoUpstream()   // or custom
 //	pipeline := Auth(auth,
 //	    MITM(ca, upstream,
-//	        Sticky(source),
+//	        Session(source),
 //	    ),
 //	)
 func MITM(ca tls.Certificate, upstream Upstream, inner Handler) Handler {
@@ -70,7 +70,7 @@ func (m *mitmHandler) Resolve(ctx context.Context, req *Request) (*Result, error
 	}
 
 	host := targetHost(req.Target)
-	cert := m.cache.GetOrCreate(host, m.caCert, &m.ca)
+	cert := m.cache.Get(host, m.caCert, &m.ca)
 
 	tlsConn := tls.Server(req.Conn, &tls.Config{
 		Certificates: []tls.Certificate{*cert},
@@ -201,8 +201,8 @@ type CertCache struct {
 	certs map[string]*tls.Certificate
 }
 
-// GetOrCreate returns a cached cert or forges a new one.
-func (c *CertCache) GetOrCreate(host string, caCert *x509.Certificate, caKey *tls.Certificate) *tls.Certificate {
+// Get returns a cached cert or forges a new one.
+func (c *CertCache) Get(host string, caCert *x509.Certificate, caKey *tls.Certificate) *tls.Certificate {
 	if c.certs == nil {
 		c.mu.Lock()
 		if c.certs == nil {
@@ -262,8 +262,8 @@ func forgeCert(host string, caCert *x509.Certificate, ca *tls.Certificate) *tls.
 	}
 }
 
-// GenerateCA creates a self-signed CA certificate for MITM interception.
-func GenerateCA() (tls.Certificate, error) {
+// NewCA creates a self-signed CA certificate for MITM interception.
+func NewCA() (tls.Certificate, error) {
 	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return tls.Certificate{}, err

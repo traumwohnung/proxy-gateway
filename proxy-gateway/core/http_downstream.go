@@ -84,22 +84,22 @@ func (d *HTTPDownstream) serveConnect(w http.ResponseWriter, r *http.Request, ra
 	slog.Info("tunneling",
 		"target", r.Host,
 		"upstream", fmt.Sprintf("%s:%d", proxy.Host, proxy.Port),
-		"upstream_proto", proxy.GetProtocol(),
+		"upstream_proto", proxy.Proto(),
 	)
 
 	upstreamConn, err := d.Upstream.Dial(r.Context(), proxy, r.Host)
 	if err != nil {
 		slog.Error("upstream dial failed", "err", err)
-		if result.ConnHandle != nil {
-			result.ConnHandle.Close(0, 0)
+		if result.ConnTracker != nil {
+			result.ConnTracker.Close(0, 0)
 		}
 		return
 	}
 	defer upstreamConn.Close()
 
-	sent, received := relay(clientConn, upstreamConn, result.ConnHandle)
-	if result.ConnHandle != nil {
-		result.ConnHandle.Close(sent, received)
+	sent, received := relay(clientConn, upstreamConn, result.ConnTracker)
+	if result.ConnTracker != nil {
+		result.ConnTracker.Close(sent, received)
 	}
 }
 
@@ -154,17 +154,17 @@ func (d *HTTPDownstream) servePlainHTTP(w http.ResponseWriter, r *http.Request, 
 		uri = "http://" + r.Host + uri
 	}
 
-	raw, err := ForwardHTTP(r.Method, uri, headers, r.Body, proxy)
+	raw, err := ForwardPlainHTTP(r.Method, uri, headers, r.Body, proxy)
 
-	if result.ConnHandle != nil {
+	if result.ConnTracker != nil {
 		var reqBytes int64
 		if r.ContentLength > 0 {
 			reqBytes = r.ContentLength
 		}
 		respBytes := int64(len(raw))
-		result.ConnHandle.RecordTraffic(true, reqBytes, func() {})
-		result.ConnHandle.RecordTraffic(false, respBytes, func() {})
-		result.ConnHandle.Close(reqBytes, respBytes)
+		result.ConnTracker.RecordTraffic(true, reqBytes, func() {})
+		result.ConnTracker.RecordTraffic(false, respBytes, func() {})
+		result.ConnTracker.Close(reqBytes, respBytes)
 	}
 
 	if err != nil {
@@ -175,19 +175,19 @@ func (d *HTTPDownstream) servePlainHTTP(w http.ResponseWriter, r *http.Request, 
 }
 
 // ---------------------------------------------------------------------------
-// Legacy compatibility — Run / HTTPHandler
+// Legacy compatibility — Run / HTTPProxyHandler
 // ---------------------------------------------------------------------------
 
 // Run starts an HTTP proxy gateway with the default upstream dialer.
-func Run(addr string, handler Handler) error {
-	d := &HTTPDownstream{Upstream: DefaultUpstream()}
+func ListenHTTP(addr string, handler Handler) error {
+	d := &HTTPDownstream{Upstream: AutoUpstream()}
 	return d.Serve(addr, handler)
 }
 
-// HTTPHandler returns an http.Handler for mounting in a chi router or
+// HTTPProxyHandler returns an http.Handler for mounting in a chi router or
 // similar. Uses the default upstream dialer.
-func HTTPHandler(handler Handler) http.Handler {
-	d := &HTTPDownstream{Upstream: DefaultUpstream()}
+func HTTPProxyHandler(handler Handler) http.Handler {
+	d := &HTTPDownstream{Upstream: AutoUpstream()}
 	return d.httpHandler(handler)
 }
 

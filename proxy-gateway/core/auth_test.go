@@ -17,7 +17,7 @@ func (a *stubAuth) Authenticate(sub, password string) error {
 
 func TestAuthPassesOnValidCredentials(t *testing.T) {
 	source := HandlerFunc(func(_ context.Context, _ *Request) (*Result, error) {
-		return ProxyResult(&Proxy{Host: "upstream", Port: 8080}), nil
+		return Resolved(&Proxy{Host: "upstream", Port: 8080}), nil
 	})
 	h := Auth(&stubAuth{"alice", "pw"}, source)
 	ctx := WithSub(context.Background(), "alice")
@@ -30,7 +30,7 @@ func TestAuthPassesOnValidCredentials(t *testing.T) {
 
 func TestAuthRejectsInvalidCredentials(t *testing.T) {
 	source := HandlerFunc(func(_ context.Context, _ *Request) (*Result, error) {
-		return ProxyResult(&Proxy{Host: "upstream", Port: 8080}), nil
+		return Resolved(&Proxy{Host: "upstream", Port: 8080}), nil
 	})
 	h := Auth(&stubAuth{"alice", "pw"}, source)
 	ctx := WithSub(context.Background(), "alice")

@@ -115,8 +115,8 @@ func (d *SOCKS5Downstream) handleConn(conn net.Conn, handler Handler) {
 	if err != nil {
 		slog.Error("upstream dial failed", "err", err)
 		sendSOCKS5Reply(conn, 0x05)
-		if result.ConnHandle != nil {
-			result.ConnHandle.Close(0, 0)
+		if result.ConnTracker != nil {
+			result.ConnTracker.Close(0, 0)
 		}
 		return
 	}
@@ -127,12 +127,12 @@ func (d *SOCKS5Downstream) handleConn(conn net.Conn, handler Handler) {
 	slog.Info("SOCKS5 routing",
 		"target", target,
 		"upstream", fmt.Sprintf("%s:%d", proxy.Host, proxy.Port),
-		"upstream_proto", proxy.GetProtocol(),
+		"upstream_proto", proxy.Proto(),
 	)
 
-	sent, received := relay(conn, upstreamConn, result.ConnHandle)
-	if result.ConnHandle != nil {
-		result.ConnHandle.Close(sent, received)
+	sent, received := relay(conn, upstreamConn, result.ConnTracker)
+	if result.ConnTracker != nil {
+		result.ConnTracker.Close(sent, received)
 	}
 }
 
@@ -140,9 +140,9 @@ func (d *SOCKS5Downstream) handleConn(conn net.Conn, handler Handler) {
 // Legacy compatibility
 // ---------------------------------------------------------------------------
 
-// RunSOCKS5 starts a SOCKS5 proxy gateway with the default upstream dialer.
-func RunSOCKS5(addr string, handler Handler) error {
-	d := &SOCKS5Downstream{Upstream: DefaultUpstream()}
+// ListenSOCKS5 starts a SOCKS5 proxy gateway with the default upstream dialer.
+func ListenSOCKS5(addr string, handler Handler) error {
+	d := &SOCKS5Downstream{Upstream: AutoUpstream()}
 	return d.Serve(addr, handler)
 }
 

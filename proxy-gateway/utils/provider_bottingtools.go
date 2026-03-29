@@ -134,7 +134,7 @@ func NewBottingtoolsSource(cfg *BottingtoolsConfig) (*BottingtoolsSource, error)
 // Resolve implements core.Handler.
 func (s *BottingtoolsSource) Resolve(ctx context.Context, _ *core.Request) (*core.Result, error) {
 	username := btBuildUsername(s.accountUser, s.product, core.GetMeta(ctx))
-	return core.ProxyResult(&core.Proxy{
+	return core.Resolved(&core.Proxy{
 		Host:     s.host,
 		Port:     1337,
 		Username: username,

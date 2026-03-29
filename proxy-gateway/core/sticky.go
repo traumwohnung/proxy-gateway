@@ -29,28 +29,28 @@ type stickyEntry struct {
 	meta           Meta
 }
 
-// StickyHandler wraps an inner Handler and provides sticky-session affinity.
+// SessionHandler wraps an inner Handler and provides sticky-session affinity.
 // Requests with the same SessionKey get the same upstream proxy for the
 // configured TTL.
-type StickyHandler struct {
+type SessionHandler struct {
 	next     Handler
 	mu       sync.RWMutex
 	sessions map[string]*stickyEntry
 	nextID   atomic.Uint64
 }
 
-// Sticky creates a StickyHandler that pins sessions to the same upstream
+// Sticky creates a SessionHandler that pins sessions to the same upstream
 // for the TTL encoded in SessionTTL(ctx). If SessionTTL is 0 or SessionKey
 // is empty, the request passes straight through to next.
-func Sticky(next Handler) *StickyHandler {
-	return &StickyHandler{
+func Session(next Handler) *SessionHandler {
+	return &SessionHandler{
 		next:     next,
 		sessions: make(map[string]*stickyEntry),
 	}
 }
 
 // Resolve implements Handler.
-func (s *StickyHandler) Resolve(ctx context.Context, req *Request) (*Result, error) {
+func (s *SessionHandler) Resolve(ctx context.Context, req *Request) (*Result, error) {
 	sessionKey := SessionKey(ctx)
 	sessionTTL := SessionTTL(ctx)
 
@@ -65,7 +65,7 @@ func (s *StickyHandler) Resolve(ctx context.Context, req *Request) (*Result, err
 	if ok && time.Since(entry.startedAt) < entry.duration {
 		p := entry.proxy
 		s.mu.RUnlock()
-		return ProxyResult(&p), nil
+		return Resolved(&p), nil
 	}
 	s.mu.RUnlock()
 
@@ -89,7 +89,7 @@ func (s *StickyHandler) Resolve(ctx context.Context, req *Request) (*Result, err
 	if existing, ok := s.sessions[sessionKey]; ok && time.Since(existing.startedAt) < existing.duration {
 		p := existing.proxy
 		s.mu.Unlock()
-		return ProxyResult(&p), nil
+		return Resolved(&p), nil
 	}
 	s.sessions[sessionKey] = newEntry
 	s.mu.Unlock()
@@ -98,7 +98,7 @@ func (s *StickyHandler) Resolve(ctx context.Context, req *Request) (*Result, err
 }
 
 // GetSession returns info about an active session, or nil.
-func (s *StickyHandler) GetSession(key string) *SessionInfo {
+func (s *SessionHandler) GetSession(key string) *SessionInfo {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	e, ok := s.sessions[key]
@@ -109,7 +109,7 @@ func (s *StickyHandler) GetSession(key string) *SessionInfo {
 }
 
 // ListSessions returns info about all active sessions.
-func (s *StickyHandler) ListSessions() []SessionInfo {
+func (s *SessionHandler) ListSessions() []SessionInfo {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var out []SessionInfo
@@ -122,7 +122,7 @@ func (s *StickyHandler) ListSessions() []SessionInfo {
 }
 
 // ForceRotate resolves a new proxy for the given session key.
-func (s *StickyHandler) ForceRotate(ctx context.Context, key string) (*SessionInfo, error) {
+func (s *SessionHandler) ForceRotate(ctx context.Context, key string) (*SessionInfo, error) {
 	s.mu.RLock()
 	e, ok := s.sessions[key]
 	if !ok || time.Since(e.startedAt) >= e.duration {
@@ -158,7 +158,7 @@ func (s *StickyHandler) ForceRotate(ctx context.Context, key string) (*SessionIn
 }
 
 // SpawnCleanup starts a background goroutine that prunes expired sessions.
-func (s *StickyHandler) SpawnCleanup() {
+func (s *SessionHandler) SpawnCleanup() {
 	go func() {
 		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()

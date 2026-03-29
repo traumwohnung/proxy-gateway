@@ -7,7 +7,7 @@ import (
 
 func TestHandlerFunc(t *testing.T) {
 	h := HandlerFunc(func(ctx context.Context, _ *Request) (*Result, error) {
-		return ProxyResult(&Proxy{Host: "test", Port: 8080, Username: Sub(ctx)}), nil
+		return Resolved(&Proxy{Host: "test", Port: 8080, Username: Sub(ctx)}), nil
 	})
 	ctx := WithSub(context.Background(), "alice")
 	r, err := h.Resolve(ctx, &Request{})
@@ -66,26 +66,26 @@ func TestContextHelpers(t *testing.T) {
 	}
 }
 
-func TestChainHandles(t *testing.T) {
+func TestChainTrackers(t *testing.T) {
 	// nil + nil
-	if ChainHandles(nil, nil) != nil {
+	if ChainTrackers(nil, nil) != nil {
 		t.Fatal("nil+nil should be nil")
 	}
 
 	// nil + handle
 	called := 0
 	h := &testHandle{onClose: func() { called++ }}
-	if ChainHandles(nil, h) != h {
+	if ChainTrackers(nil, h) != h {
 		t.Fatal("nil+h should be h")
 	}
-	if ChainHandles(h, nil) != h {
+	if ChainTrackers(h, nil) != h {
 		t.Fatal("h+nil should be h")
 	}
 
 	// both
 	a := &testHandle{onClose: func() { called++ }}
 	b := &testHandle{onClose: func() { called += 10 }}
-	c := ChainHandles(a, b)
+	c := ChainTrackers(a, b)
 	c.Close(0, 0)
 	if called != 11 {
 		t.Fatalf("expected 11, got %d", called)
@@ -99,13 +99,13 @@ type testHandle struct {
 func (h *testHandle) RecordTraffic(_ bool, _ int64, _ func()) {}
 func (h *testHandle) Close(_, _ int64)                        { h.onClose() }
 
-func TestProxyResult(t *testing.T) {
+func TestResolved(t *testing.T) {
 	p := &Proxy{Host: "test", Port: 8080}
-	r := ProxyResult(p)
+	r := Resolved(p)
 	if r.Proxy != p {
-		t.Fatal("ProxyResult should wrap the proxy")
+		t.Fatal("Resolved should wrap the proxy")
 	}
-	if r.ConnHandle != nil || r.ResponseHook != nil || r.HTTPResponse != nil {
+	if r.ConnTracker != nil || r.ResponseHook != nil || r.HTTPResponse != nil {
 		t.Fatal("other fields should be nil")
 	}
 }

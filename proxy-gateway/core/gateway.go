@@ -21,7 +21,7 @@ type listener struct {
 // Option configures a Gateway.
 type Option func(*Gateway)
 
-// WithUpstream sets the upstream dialer. Default is DefaultUpstream().
+// WithUpstream sets the upstream dialer. Default is AutoUpstream().
 func WithUpstream(u Upstream) Option {
 	return func(g *Gateway) { g.upstream = u }
 }
@@ -40,7 +40,7 @@ func New(handler Handler, opts ...Option) *Gateway {
 		opt(g)
 	}
 	if g.upstream == nil {
-		g.upstream = DefaultUpstream()
+		g.upstream = AutoUpstream()
 	}
 	return g
 }

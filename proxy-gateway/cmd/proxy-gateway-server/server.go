@@ -10,7 +10,7 @@ import (
 	"proxy-gateway/core"
 )
 
-func RunServer(cfg *Config, pipeline core.Handler, sessions *core.StickyHandler, apiKey string) error {
+func RunServer(cfg *Config, pipeline core.Handler, sessions *core.SessionHandler, apiKey string) error {
 	r := chi.NewRouter()
 	r.Use(chiware.Recoverer)
 
@@ -23,14 +23,14 @@ func RunServer(cfg *Config, pipeline core.Handler, sessions *core.StickyHandler,
 		slog.Info("API endpoints enabled")
 	}
 
-	proxyHandler := core.HTTPHandler(pipeline)
+	proxyHandler := core.HTTPProxyHandler(pipeline)
 	r.HandleFunc("/*", proxyHandler.ServeHTTP)
 	r.HandleFunc("/", proxyHandler.ServeHTTP)
 
 	// Start SOCKS5 listener in a goroutine if configured.
 	if cfg.Socks5Addr != "" {
 		go func() {
-			if err := core.RunSOCKS5(cfg.Socks5Addr, pipeline); err != nil {
+			if err := core.ListenSOCKS5(cfg.Socks5Addr, pipeline); err != nil {
 				slog.Error("SOCKS5 server error", "err", err)
 			}
 		}()

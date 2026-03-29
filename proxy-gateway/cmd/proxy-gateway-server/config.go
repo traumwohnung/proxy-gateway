@@ -51,7 +51,7 @@ func LoadConfig(path string) (*Config, error) {
 }
 
 // BuildPipeline constructs the full handler pipeline from config.
-func BuildPipeline(cfg *Config, configDir string) (core.Handler, *core.StickyHandler, error) {
+func BuildPipeline(cfg *Config, configDir string) (core.Handler, *core.SessionHandler, error) {
 	if cfg.AuthSub == "" || cfg.AuthPassword == "" {
 		return nil, nil, fmt.Errorf("auth_sub and auth_password are required")
 	}
@@ -74,7 +74,7 @@ func BuildPipeline(cfg *Config, configDir string) (core.Handler, *core.StickyHan
 		return h.Resolve(ctx, req)
 	})
 
-	sticky := core.Sticky(router)
+	sticky := core.Session(router)
 
 	pipeline := ParseJSONCreds(
 		core.Auth(

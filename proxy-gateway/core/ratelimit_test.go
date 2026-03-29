@@ -11,9 +11,9 @@ import (
 
 func TestRateLimitConcurrentConnections(t *testing.T) {
 	source := HandlerFunc(func(_ context.Context, _ *Request) (*Result, error) {
-		return ProxyResult(&Proxy{Host: "upstream", Port: 8080}), nil
+		return Resolved(&Proxy{Host: "upstream", Port: 8080}), nil
 	})
-	rl := RateLimiting(source, StaticLimits([]RateLimit{
+	rl := RateLimit(source, StaticLimits([]RateLimitRule{
 		{Type: LimitConcurrentConnections, Timeframe: Realtime, Max: 2},
 	}))
 	h1, err := rl.OpenConnection("alice")
@@ -36,9 +36,9 @@ func TestRateLimitConcurrentConnections(t *testing.T) {
 
 func TestRateLimitBandwidthMidConnection(t *testing.T) {
 	source := HandlerFunc(func(_ context.Context, _ *Request) (*Result, error) {
-		return ProxyResult(&Proxy{Host: "upstream", Port: 8080}), nil
+		return Resolved(&Proxy{Host: "upstream", Port: 8080}), nil
 	})
-	rl := RateLimiting(source, StaticLimits([]RateLimit{
+	rl := RateLimit(source, StaticLimits([]RateLimitRule{
 		{Type: LimitUploadBytes, Timeframe: Hourly, Window: 1, Max: 100},
 	}))
 	h, err := rl.OpenConnection("alice")
@@ -57,11 +57,11 @@ func TestRateLimitBandwidthMidConnection(t *testing.T) {
 	h.Close(110, 0)
 }
 
-func TestRateLimitWrapsResultConnHandle(t *testing.T) {
+func TestRateLimitWrapsResultConnTracker(t *testing.T) {
 	source := HandlerFunc(func(_ context.Context, _ *Request) (*Result, error) {
-		return ProxyResult(&Proxy{Host: "upstream", Port: 8080}), nil
+		return Resolved(&Proxy{Host: "upstream", Port: 8080}), nil
 	})
-	rl := RateLimiting(source, StaticLimits([]RateLimit{
+	rl := RateLimit(source, StaticLimits([]RateLimitRule{
 		{Type: LimitConcurrentConnections, Timeframe: Realtime, Max: 10},
 	}))
 
@@ -70,9 +70,9 @@ func TestRateLimitWrapsResultConnHandle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.ConnHandle == nil {
-		t.Fatal("expected ConnHandle in result")
+	if result.ConnTracker == nil {
+		t.Fatal("expected ConnTracker in result")
 	}
 	// Close it to decrement concurrent counter.
-	result.ConnHandle.Close(0, 0)
+	result.ConnTracker.Close(0, 0)
 }

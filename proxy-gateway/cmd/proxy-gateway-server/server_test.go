@@ -10,7 +10,7 @@ import (
 
 var testProxy = &core.Proxy{Host: "upstream", Port: 8080}
 var testSource = core.HandlerFunc(func(_ context.Context, _ *core.Request) (*core.Result, error) {
-	return core.ProxyResult(testProxy), nil
+	return core.Resolved(testProxy), nil
 })
 
 // ---------------------------------------------------------------------------
@@ -55,7 +55,7 @@ func TestParseJSONCredsPopulatesContext(t *testing.T) {
 		if core.GetMeta(ctx).GetString("app") != "test" {
 			t.Fatal("expected meta.app=test")
 		}
-		return core.ProxyResult(testProxy), nil
+		return core.Resolved(testProxy), nil
 	}))
 	req := &core.Request{
 		RawUsername: `{"sub":"alice","set":"res","minutes":5,"meta":{"app":"test"}}`,
@@ -96,7 +96,7 @@ func TestFullPipeline(t *testing.T) {
 	pipeline := ParseJSONCreds(
 		core.Auth(
 			utils.NewMapAuth(map[string]string{"alice": "pw"}),
-			core.Sticky(testSource),
+			core.Session(testSource),
 		),
 	)
 

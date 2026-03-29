@@ -27,7 +27,7 @@ func bearerAuth(apiKey string, next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func handleListSessions(sessions *core.StickyHandler) http.HandlerFunc {
+func handleListSessions(sessions *core.SessionHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		list := sessions.ListSessions()
 		if list == nil {
@@ -37,7 +37,7 @@ func handleListSessions(sessions *core.StickyHandler) http.HandlerFunc {
 	}
 }
 
-func handleGetSession(sessions *core.StickyHandler) http.HandlerFunc {
+func handleGetSession(sessions *core.SessionHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		key := chi.URLParam(r, "key")
 		info := sessions.GetSession(key)
@@ -49,7 +49,7 @@ func handleGetSession(sessions *core.StickyHandler) http.HandlerFunc {
 	}
 }
 
-func handleForceRotate(sessions *core.StickyHandler) http.HandlerFunc {
+func handleForceRotate(sessions *core.SessionHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		key := chi.URLParam(r, "key")
 		info, err := sessions.ForceRotate(r.Context(), key)

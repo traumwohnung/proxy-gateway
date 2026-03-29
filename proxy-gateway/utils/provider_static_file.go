@@ -65,7 +65,7 @@ func (s *StaticFileSource) Resolve(_ context.Context, _ *core.Request) (*core.Re
 		return nil, fmt.Errorf("empty proxy pool")
 	}
 	cp := *p
-	return core.ProxyResult(&cp), nil
+	return core.Resolved(&cp), nil
 }
 
 // Describe returns a human-readable description.
