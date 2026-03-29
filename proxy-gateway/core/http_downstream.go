@@ -1,4 +1,4 @@
-package gateway
+package core
 
 import (
 	"encoding/base64"
@@ -9,26 +9,24 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
-
-	"proxy-gateway/core"
 )
 
 // ---------------------------------------------------------------------------
-// HTTPDownstream — implements core.Downstream for HTTP proxy protocol
+// HTTPDownstream — implements Downstream for HTTP proxy protocol
 // ---------------------------------------------------------------------------
 
 // HTTPDownstream accepts HTTP proxy connections (CONNECT + plain HTTP).
 type HTTPDownstream struct {
-	Upstream core.Upstream
+	Upstream Upstream
 }
 
-// Serve implements core.Downstream.
-func (d *HTTPDownstream) Serve(addr string, handler core.Handler) error {
+// Serve implements Downstream.
+func (d *HTTPDownstream) Serve(addr string, handler Handler) error {
 	slog.Info("HTTP proxy gateway listening", "addr", addr)
 	return http.ListenAndServe(addr, d.httpHandler(handler))
 }
 
-func (d *HTTPDownstream) httpHandler(handler core.Handler) http.Handler {
+func (d *HTTPDownstream) httpHandler(handler Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
 
@@ -48,7 +46,7 @@ func (d *HTTPDownstream) httpHandler(handler core.Handler) http.Handler {
 	})
 }
 
-func (d *HTTPDownstream) serveConnect(w http.ResponseWriter, r *http.Request, rawUser, rawPass string, handler core.Handler) {
+func (d *HTTPDownstream) serveConnect(w http.ResponseWriter, r *http.Request, rawUser, rawPass string, handler Handler) {
 	hj, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "hijacking not supported", http.StatusInternalServerError)
@@ -61,7 +59,7 @@ func (d *HTTPDownstream) serveConnect(w http.ResponseWriter, r *http.Request, ra
 		return
 	}
 
-	req := &core.Request{
+	req := &Request{
 		RawUsername: rawUser,
 		RawPassword: rawPass,
 		Target:      r.Host,
@@ -105,8 +103,8 @@ func (d *HTTPDownstream) serveConnect(w http.ResponseWriter, r *http.Request, ra
 	}
 }
 
-func (d *HTTPDownstream) servePlainHTTP(w http.ResponseWriter, r *http.Request, rawUser, rawPass string, handler core.Handler) {
-	req := &core.Request{
+func (d *HTTPDownstream) servePlainHTTP(w http.ResponseWriter, r *http.Request, rawUser, rawPass string, handler Handler) {
+	req := &Request{
 		RawUsername: rawUser,
 		RawPassword: rawPass,
 		Target:      r.Host,
@@ -181,14 +179,14 @@ func (d *HTTPDownstream) servePlainHTTP(w http.ResponseWriter, r *http.Request, 
 // ---------------------------------------------------------------------------
 
 // Run starts an HTTP proxy gateway with the default upstream dialer.
-func Run(addr string, handler core.Handler) error {
+func Run(addr string, handler Handler) error {
 	d := &HTTPDownstream{Upstream: DefaultUpstream()}
 	return d.Serve(addr, handler)
 }
 
 // HTTPHandler returns an http.Handler for mounting in a chi router or
 // similar. Uses the default upstream dialer.
-func HTTPHandler(handler core.Handler) http.Handler {
+func HTTPHandler(handler Handler) http.Handler {
 	d := &HTTPDownstream{Upstream: DefaultUpstream()}
 	return d.httpHandler(handler)
 }

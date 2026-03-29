@@ -1,10 +1,8 @@
-package middleware
+package core
 
 import (
 	"context"
 	"testing"
-
-	"proxy-gateway/core"
 )
 
 // ---------------------------------------------------------------------------
@@ -12,8 +10,8 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestRateLimitConcurrentConnections(t *testing.T) {
-	source := core.HandlerFunc(func(_ context.Context, _ *core.Request) (*core.Result, error) {
-		return core.ProxyResult(&core.Proxy{Host: "upstream", Port: 8080}), nil
+	source := HandlerFunc(func(_ context.Context, _ *Request) (*Result, error) {
+		return ProxyResult(&Proxy{Host: "upstream", Port: 8080}), nil
 	})
 	rl := RateLimiting(source, StaticLimits([]RateLimit{
 		{Type: LimitConcurrentConnections, Timeframe: Realtime, Max: 2},
@@ -37,8 +35,8 @@ func TestRateLimitConcurrentConnections(t *testing.T) {
 }
 
 func TestRateLimitBandwidthMidConnection(t *testing.T) {
-	source := core.HandlerFunc(func(_ context.Context, _ *core.Request) (*core.Result, error) {
-		return core.ProxyResult(&core.Proxy{Host: "upstream", Port: 8080}), nil
+	source := HandlerFunc(func(_ context.Context, _ *Request) (*Result, error) {
+		return ProxyResult(&Proxy{Host: "upstream", Port: 8080}), nil
 	})
 	rl := RateLimiting(source, StaticLimits([]RateLimit{
 		{Type: LimitUploadBytes, Timeframe: Hourly, Window: 1, Max: 100},
@@ -60,15 +58,15 @@ func TestRateLimitBandwidthMidConnection(t *testing.T) {
 }
 
 func TestRateLimitWrapsResultConnHandle(t *testing.T) {
-	source := core.HandlerFunc(func(_ context.Context, _ *core.Request) (*core.Result, error) {
-		return core.ProxyResult(&core.Proxy{Host: "upstream", Port: 8080}), nil
+	source := HandlerFunc(func(_ context.Context, _ *Request) (*Result, error) {
+		return ProxyResult(&Proxy{Host: "upstream", Port: 8080}), nil
 	})
 	rl := RateLimiting(source, StaticLimits([]RateLimit{
 		{Type: LimitConcurrentConnections, Timeframe: Realtime, Max: 10},
 	}))
 
-	ctx := core.WithSub(context.Background(), "alice")
-	result, err := rl.Resolve(ctx, &core.Request{})
+	ctx := WithSub(context.Background(), "alice")
+	result, err := rl.Resolve(ctx, &Request{})
 	if err != nil {
 		t.Fatal(err)
 	}

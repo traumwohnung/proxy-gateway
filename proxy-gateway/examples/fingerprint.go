@@ -20,7 +20,6 @@ import (
 	"github.com/sardanioss/httpcloak/client"
 
 	"proxy-gateway/core"
-	"proxy-gateway/middleware"
 )
 
 // Fingerprint returns middleware that performs TLS interception and re-connects
@@ -28,7 +27,7 @@ import (
 //
 // Usage:
 //
-//	ca, _ := middleware.GenerateCA()
+//	ca, _ := core.GenerateCA()
 //	pipeline := core.Auth(auth,
 //	    examples.Fingerprint(ca, "chrome-latest",
 //	        core.Sticky(source),
@@ -45,7 +44,7 @@ func Fingerprint(ca tls.Certificate, preset string, inner core.Handler) core.Han
 		ca:     ca,
 		caCert: caCert,
 		preset: preset,
-		cache:  &middleware.CertCache{},
+		cache:  &core.CertCache{},
 	}
 }
 
@@ -54,7 +53,7 @@ type fingerprintHandler struct {
 	ca     tls.Certificate
 	caCert *x509.Certificate
 	preset string
-	cache  *middleware.CertCache
+	cache  *core.CertCache
 }
 
 func (h *fingerprintHandler) Resolve(ctx context.Context, req *core.Request) (*core.Result, error) {

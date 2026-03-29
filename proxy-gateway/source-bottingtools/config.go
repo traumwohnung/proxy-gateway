@@ -3,7 +3,7 @@ package bottingtools
 import (
 	"fmt"
 
-	"proxy-gateway/core"
+	"proxy-gateway/utils"
 )
 
 // Config is the configuration for the bottingtools proxy source.
@@ -25,7 +25,7 @@ type ProductConfig struct {
 // ResidentialConfig holds residential-specific parameters.
 type ResidentialConfig struct {
 	Quality   ResidentialQuality `toml:"quality"   yaml:"quality"   json:"quality"`
-	Countries []core.Country     `toml:"countries" yaml:"countries" json:"countries"`
+	Countries []utils.Country    `toml:"countries" yaml:"countries" json:"countries"`
 	City      string             `toml:"city"      yaml:"city"      json:"city"`
 }
 
@@ -39,12 +39,12 @@ func (r *ResidentialConfig) Validate() error {
 
 // ISPConfig holds ISP-specific parameters.
 type ISPConfig struct {
-	Countries []core.Country `toml:"countries" yaml:"countries" json:"countries"`
+	Countries []utils.Country `toml:"countries" yaml:"countries" json:"countries"`
 }
 
 // DatacenterConfig holds datacenter-specific parameters.
 type DatacenterConfig struct {
-	Countries []core.Country `toml:"countries" yaml:"countries" json:"countries"`
+	Countries []utils.Country `toml:"countries" yaml:"countries" json:"countries"`
 }
 
 // ResidentialQuality is the residential proxy quality tier.
@@ -65,11 +65,11 @@ func (q ResidentialQuality) AsTypeStr() string {
 
 // RawProductConfig is used for unmarshaling before dispatching to the typed config.
 type RawProductConfig struct {
-	Type      string         `toml:"type"      yaml:"type"      json:"type"`
-	Quality   string         `toml:"quality"   yaml:"quality"   json:"quality"`
-	Countries []core.Country `toml:"countries" yaml:"countries" json:"countries"`
-	City      string         `toml:"city"      yaml:"city"      json:"city"`
-	SessTime  int            `toml:"sess_time" yaml:"sess_time" json:"sess_time"`
+	Type      string          `toml:"type"      yaml:"type"      json:"type"`
+	Quality   string          `toml:"quality"   yaml:"quality"   json:"quality"`
+	Countries []utils.Country `toml:"countries" yaml:"countries" json:"countries"`
+	City      string          `toml:"city"      yaml:"city"      json:"city"`
+	SessTime  int             `toml:"sess_time" yaml:"sess_time" json:"sess_time"`
 }
 
 // ParseProductConfig converts a raw product table into a typed ProductConfig.

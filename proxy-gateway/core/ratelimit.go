@@ -1,4 +1,4 @@
-package middleware
+package core
 
 import (
 	"context"
@@ -6,8 +6,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"proxy-gateway/core"
 )
 
 // LimitType defines what resource the limit applies to.
@@ -72,7 +70,7 @@ func (r RateLimit) windowDuration() time.Duration {
 // RateLimitHandler wraps an inner Handler with rate limiting.
 // It injects a ConnHandle into the Result for connection-level tracking.
 type RateLimitHandler struct {
-	next   core.Handler
+	next   Handler
 	limits func(sub string) []RateLimit
 	mu     sync.RWMutex
 	state  map[string]*userState
@@ -94,7 +92,7 @@ func StaticLimits(limits []RateLimit) RateLimitOption {
 // RateLimiting wraps next with rate limiting. Unlike the old ConnectionTracker
 // interface, this works at any position in the pipeline — it wraps
 // Result.ConnHandle so the gateway always sees the tracker.
-func RateLimiting(next core.Handler, opts ...RateLimitOption) *RateLimitHandler {
+func RateLimiting(next Handler, opts ...RateLimitOption) *RateLimitHandler {
 	h := &RateLimitHandler{
 		next:  next,
 		state: make(map[string]*userState),
@@ -108,10 +106,10 @@ func RateLimiting(next core.Handler, opts ...RateLimitOption) *RateLimitHandler 
 	return h
 }
 
-// Resolve implements core.Handler. It checks pre-connection limits,
+// Resolve implements Handler. It checks pre-connection limits,
 // delegates to the inner handler, then wraps the Result.ConnHandle.
-func (h *RateLimitHandler) Resolve(ctx context.Context, req *core.Request) (*core.Result, error) {
-	sub := core.Sub(ctx)
+func (h *RateLimitHandler) Resolve(ctx context.Context, req *Request) (*Result, error) {
+	sub := Sub(ctx)
 	limits := h.limits(sub)
 	if len(limits) == 0 {
 		return h.next.Resolve(ctx, req)
@@ -134,13 +132,13 @@ func (h *RateLimitHandler) Resolve(ctx context.Context, req *core.Request) (*cor
 	if err != nil {
 		return nil, err
 	}
-	result.ConnHandle = core.ChainHandles(handle, result.ConnHandle)
+	result.ConnHandle = ChainHandles(handle, result.ConnHandle)
 
 	return result, nil
 }
 
 // openConnection creates a tracked ConnHandle, checking concurrent/total limits.
-func (h *RateLimitHandler) openConnection(sub string, limits []RateLimit, st *userState) (core.ConnHandle, error) {
+func (h *RateLimitHandler) openConnection(sub string, limits []RateLimit, st *userState) (ConnHandle, error) {
 	for _, rl := range limits {
 		if rl.Type != LimitConcurrentConnections {
 			continue
@@ -167,7 +165,7 @@ func (h *RateLimitHandler) openConnection(sub string, limits []RateLimit, st *us
 
 // OpenConnection is a standalone method for creating tracked handles
 // (used by tests and direct callers).
-func (h *RateLimitHandler) OpenConnection(sub string) (core.ConnHandle, error) {
+func (h *RateLimitHandler) OpenConnection(sub string) (ConnHandle, error) {
 	limits := h.limits(sub)
 	if len(limits) == 0 {
 		return &noopHandle{}, nil

@@ -1,25 +1,23 @@
-package gateway
+package core
 
 import (
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
-
-	"proxy-gateway/core"
 )
 
 // ---------------------------------------------------------------------------
-// SOCKS5Downstream — implements core.Downstream for SOCKS5 protocol
+// SOCKS5Downstream — implements Downstream for SOCKS5 protocol
 // ---------------------------------------------------------------------------
 
 // SOCKS5Downstream accepts SOCKS5 proxy connections.
 type SOCKS5Downstream struct {
-	Upstream core.Upstream
+	Upstream Upstream
 }
 
-// Serve implements core.Downstream.
-func (d *SOCKS5Downstream) Serve(addr string, handler core.Handler) error {
+// Serve implements Downstream.
+func (d *SOCKS5Downstream) Serve(addr string, handler Handler) error {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("socks5 listen %s: %w", addr, err)
@@ -34,7 +32,7 @@ func (d *SOCKS5Downstream) Serve(addr string, handler core.Handler) error {
 	}
 }
 
-func (d *SOCKS5Downstream) handleConn(conn net.Conn, handler core.Handler) {
+func (d *SOCKS5Downstream) handleConn(conn net.Conn, handler Handler) {
 	defer conn.Close()
 
 	// Greeting.
@@ -93,7 +91,7 @@ func (d *SOCKS5Downstream) handleConn(conn net.Conn, handler core.Handler) {
 		return
 	}
 
-	req := &core.Request{
+	req := &Request{
 		RawUsername: rawUsername,
 		RawPassword: rawPassword,
 		Target:      target,
@@ -143,7 +141,7 @@ func (d *SOCKS5Downstream) handleConn(conn net.Conn, handler core.Handler) {
 // ---------------------------------------------------------------------------
 
 // RunSOCKS5 starts a SOCKS5 proxy gateway with the default upstream dialer.
-func RunSOCKS5(addr string, handler core.Handler) error {
+func RunSOCKS5(addr string, handler Handler) error {
 	d := &SOCKS5Downstream{Upstream: DefaultUpstream()}
 	return d.Serve(addr, handler)
 }

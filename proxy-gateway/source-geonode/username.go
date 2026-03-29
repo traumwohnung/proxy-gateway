@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"proxy-gateway/core"
+	"proxy-gateway/utils"
 )
 
 // BuildUsername builds the upstream proxy username for a single request.
@@ -22,14 +22,14 @@ func RotateUsername(cfg *Config) string {
 	return BuildUsername(cfg)
 }
 
-func buildRotating(username string, country core.Country) string {
+func buildRotating(username string, country utils.Country) string {
 	if country == "" {
 		return username
 	}
 	return fmt.Sprintf("%s-country-%s", username, strings.ToUpper(country.AsParamStr()))
 }
 
-func buildSticky(username string, sessTime uint32, sessionID string, country core.Country) string {
+func buildSticky(username string, sessTime uint32, sessionID string, country utils.Country) string {
 	parts := []string{
 		username,
 		fmt.Sprintf("session-%s", sessionID),
@@ -41,15 +41,15 @@ func buildSticky(username string, sessTime uint32, sessionID string, country cor
 	return strings.Join(parts, "-")
 }
 
-func pickCountry(countries []core.Country) core.Country {
+func pickCountry(countries []utils.Country) utils.Country {
 	if len(countries) == 0 {
 		return ""
 	}
-	return countries[int(core.CheapRandom())%len(countries)]
+	return countries[int(utils.CheapRandom())%len(countries)]
 }
 
 func randomSessionID() string {
-	a := core.CheapRandom()
-	b := core.CheapRandom()
+	a := utils.CheapRandom()
+	b := utils.CheapRandom()
 	return fmt.Sprintf("%016x", a^(b<<32))
 }

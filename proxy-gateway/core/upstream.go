@@ -1,4 +1,4 @@
-package gateway
+package core
 
 import (
 	"context"
@@ -6,18 +6,16 @@ import (
 	"fmt"
 	"io"
 	"net"
-
-	"proxy-gateway/core"
 )
 
 // ---------------------------------------------------------------------------
 // HTTPUpstream — dials through an HTTP CONNECT proxy
 // ---------------------------------------------------------------------------
 
-// HTTPUpstream implements core.Upstream using the HTTP CONNECT method.
+// HTTPUpstream implements Upstream using the HTTP CONNECT method.
 type HTTPUpstream struct{}
 
-func (HTTPUpstream) Dial(_ context.Context, proxy *core.Proxy, target string) (net.Conn, error) {
+func (HTTPUpstream) Dial(_ context.Context, proxy *Proxy, target string) (net.Conn, error) {
 	addr := hostPort(proxy.Host, proxy.Port)
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
@@ -63,10 +61,10 @@ func (HTTPUpstream) Dial(_ context.Context, proxy *core.Proxy, target string) (n
 // SOCKS5Upstream — dials through a SOCKS5 proxy
 // ---------------------------------------------------------------------------
 
-// SOCKS5Upstream implements core.Upstream using the SOCKS5 protocol.
+// SOCKS5Upstream implements Upstream using the SOCKS5 protocol.
 type SOCKS5Upstream struct{}
 
-func (SOCKS5Upstream) Dial(_ context.Context, proxy *core.Proxy, target string) (net.Conn, error) {
+func (SOCKS5Upstream) Dial(_ context.Context, proxy *Proxy, target string) (net.Conn, error) {
 	addr := hostPort(proxy.Host, proxy.Port)
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
@@ -174,14 +172,14 @@ func socks5Handshake(conn net.Conn, host string, port uint16, username, password
 // DefaultUpstream — dispatches by proxy.Protocol
 // ---------------------------------------------------------------------------
 
-// DefaultUpstream returns a core.Upstream that dispatches to HTTPUpstream
+// DefaultUpstream returns a Upstream that dispatches to HTTPUpstream
 // or SOCKS5Upstream based on the proxy's Protocol field.
-func DefaultUpstream() core.Upstream {
+func DefaultUpstream() Upstream {
 	http := HTTPUpstream{}
 	socks5 := SOCKS5Upstream{}
-	return core.UpstreamFunc(func(ctx context.Context, proxy *core.Proxy, target string) (net.Conn, error) {
+	return UpstreamFunc(func(ctx context.Context, proxy *Proxy, target string) (net.Conn, error) {
 		switch proxy.GetProtocol() {
-		case core.ProtocolSOCKS5:
+		case ProtocolSOCKS5:
 			return socks5.Dial(ctx, proxy, target)
 		default:
 			return http.Dial(ctx, proxy, target)

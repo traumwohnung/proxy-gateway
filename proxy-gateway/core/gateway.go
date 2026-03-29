@@ -1,22 +1,20 @@
-package gateway
+package core
 
 import (
 	"fmt"
 	"sync"
-
-	"proxy-gateway/core"
 )
 
 // Gateway is a multi-protocol proxy gateway. It wires multiple downstream
 // listeners to a single handler pipeline, using pluggable upstream dialers.
 type Gateway struct {
-	handler   core.Handler
-	upstream  core.Upstream
+	handler   Handler
+	upstream  Upstream
 	listeners []listener
 }
 
 type listener struct {
-	downstream core.Downstream
+	downstream Downstream
 	addr       string
 }
 
@@ -24,19 +22,19 @@ type listener struct {
 type Option func(*Gateway)
 
 // WithUpstream sets the upstream dialer. Default is DefaultUpstream().
-func WithUpstream(u core.Upstream) Option {
+func WithUpstream(u Upstream) Option {
 	return func(g *Gateway) { g.upstream = u }
 }
 
 // Listen adds a downstream listener at the given address.
-func Listen(d core.Downstream, addr string) Option {
+func Listen(d Downstream, addr string) Option {
 	return func(g *Gateway) {
 		g.listeners = append(g.listeners, listener{downstream: d, addr: addr})
 	}
 }
 
 // New creates a Gateway with the given handler pipeline and options.
-func New(handler core.Handler, opts ...Option) *Gateway {
+func New(handler Handler, opts ...Option) *Gateway {
 	g := &Gateway{handler: handler}
 	for _, opt := range opts {
 		opt(g)

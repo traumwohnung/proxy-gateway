@@ -1,16 +1,14 @@
-package gateway
+package core
 
 import (
 	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
-
-	"proxy-gateway/core"
 )
 
 // ForwardHTTP sends a plain HTTP request through an upstream proxy.
-func ForwardHTTP(method, uri string, headers []string, body io.Reader, proxy *core.Proxy) ([]byte, error) {
+func ForwardHTTP(method, uri string, headers []string, body io.Reader, proxy *Proxy) ([]byte, error) {
 	conn, err := net.Dial("tcp", hostPort(proxy.Host, proxy.Port))
 	if err != nil {
 		return nil, fmt.Errorf("connecting to upstream %s: %w", hostPort(proxy.Host, proxy.Port), err)

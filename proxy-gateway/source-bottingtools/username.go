@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"proxy-gateway/core"
+	"proxy-gateway/utils"
 )
 
 func BuildUsername(accountUser string, product ProductConfig, meta core.Meta) string {
@@ -71,11 +72,11 @@ func RotateSessionID(username string) string {
 	return strings.Join(parts, "_")
 }
 
-func pickCountry(countries []core.Country) core.Country {
+func pickCountry(countries []utils.Country) utils.Country {
 	if len(countries) == 0 {
 		return ""
 	}
-	return countries[int(core.CheapRandom())%len(countries)]
+	return countries[int(utils.CheapRandom())%len(countries)]
 }
 
 func sesstimeStr(meta core.Meta) string {
@@ -94,7 +95,7 @@ func sesstimeStr(meta core.Meta) string {
 }
 
 func randomSessionID() string {
-	a := core.CheapRandom()
-	b := core.CheapRandom()
+	a := utils.CheapRandom()
+	b := utils.CheapRandom()
 	return fmt.Sprintf("%016x", a^(b<<32))
 }

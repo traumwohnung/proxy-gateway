@@ -1,6 +1,6 @@
 package geonode
 
-import "proxy-gateway/core"
+import "proxy-gateway/utils"
 
 // Config is the configuration for the geonode proxy source.
 type Config struct {
@@ -8,7 +8,7 @@ type Config struct {
 	PasswordEnv string          `toml:"password_env" yaml:"password_env" json:"password_env"`
 	Gateway     GeonodeGateway  `toml:"gateway"      yaml:"gateway"      json:"gateway"`
 	Protocol    GeonodeProtocol `toml:"protocol"     yaml:"protocol"     json:"protocol"`
-	Countries   []core.Country  `toml:"countries"    yaml:"countries"    json:"countries"`
+	Countries   []utils.Country `toml:"countries"    yaml:"countries"    json:"countries"`
 	Session     SessionConfig   `toml:"session"      yaml:"session"      json:"session"`
 }
 

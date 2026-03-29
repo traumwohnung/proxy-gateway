@@ -1,4 +1,4 @@
-package middleware
+package core
 
 import (
 	"bufio"
@@ -18,8 +18,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"proxy-gateway/core"
 )
 
 // MITM creates TLS-interception middleware. It terminates the client's TLS
@@ -33,12 +31,12 @@ import (
 //
 //	ca, _ := middleware.GenerateCA()
 //	upstream := gateway.DefaultUpstream()   // or custom
-//	pipeline := core.Auth(auth,
+//	pipeline := Auth(auth,
 //	    MITM(ca, upstream,
-//	        core.Sticky(source),
+//	        Sticky(source),
 //	    ),
 //	)
-func MITM(ca tls.Certificate, upstream core.Upstream, inner core.Handler) core.Handler {
+func MITM(ca tls.Certificate, upstream Upstream, inner Handler) Handler {
 	caCert, err := x509.ParseCertificate(ca.Certificate[0])
 	if err != nil {
 		panic(fmt.Sprintf("mitm: failed to parse CA certificate: %v", err))
@@ -53,21 +51,21 @@ func MITM(ca tls.Certificate, upstream core.Upstream, inner core.Handler) core.H
 }
 
 type mitmHandler struct {
-	inner    core.Handler
-	upstream core.Upstream
+	inner    Handler
+	upstream Upstream
 	ca       tls.Certificate
 	caCert   *x509.Certificate
 	cache    *CertCache
 }
 
-func (m *mitmHandler) Resolve(ctx context.Context, req *core.Request) (*core.Result, error) {
+func (m *mitmHandler) Resolve(ctx context.Context, req *Request) (*Result, error) {
 	// Only intercept tunnel connections (CONNECT / SOCKS5).
 	if req.Conn == nil {
 		return m.inner.Resolve(ctx, req)
 	}
 
 	// Don't double-intercept.
-	if ts := core.GetTLSState(ctx); ts.Broken {
+	if ts := GetTLSState(ctx); ts.Broken {
 		return m.inner.Resolve(ctx, req)
 	}
 
@@ -86,7 +84,7 @@ func (m *mitmHandler) Resolve(ctx context.Context, req *core.Request) (*core.Res
 	slog.Debug("MITM TLS intercepting", "host", host)
 
 	// Set TLS state in context for child requests.
-	childCtx := core.WithTLSState(ctx, core.TLSState{
+	childCtx := WithTLSState(ctx, TLSState{
 		Broken:     true,
 		ServerName: host,
 	})
@@ -98,7 +96,7 @@ func (m *mitmHandler) Resolve(ctx context.Context, req *core.Request) (*core.Res
 			break // client closed or error
 		}
 
-		childReq := &core.Request{
+		childReq := &Request{
 			RawUsername: req.RawUsername,
 			RawPassword: req.RawPassword,
 			Target:      host + ":443",
@@ -139,7 +137,7 @@ func (m *mitmHandler) Resolve(ctx context.Context, req *core.Request) (*core.Res
 	return nil, nil // we handled it
 }
 
-func (m *mitmHandler) forwardHTTPRequest(ctx context.Context, httpReq *http.Request, host string, proxy *core.Proxy) (*http.Response, error) {
+func (m *mitmHandler) forwardHTTPRequest(ctx context.Context, httpReq *http.Request, host string, proxy *Proxy) (*http.Response, error) {
 	target := host + ":443"
 	upstreamConn, err := m.upstream.Dial(ctx, proxy, target)
 	if err != nil {

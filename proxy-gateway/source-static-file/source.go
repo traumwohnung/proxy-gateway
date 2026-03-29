@@ -6,11 +6,12 @@ import (
 	"path/filepath"
 
 	"proxy-gateway/core"
+	"proxy-gateway/utils"
 )
 
 // Source is a proxy source backed by a fixed list loaded from a text file.
 type Source struct {
-	pool        *core.CountingPool[core.Proxy]
+	pool        *utils.CountingPool[core.Proxy]
 	pathDisplay string
 }
 
@@ -26,7 +27,7 @@ func Load(path string, format core.ProxyFormat) (*Source, error) {
 		return nil, fmt.Errorf("no proxies found in %s", path)
 	}
 	return &Source{
-		pool:        core.NewCountingPool(proxies),
+		pool:        utils.NewCountingPool(proxies),
 		pathDisplay: path,
 	}, nil
 }
