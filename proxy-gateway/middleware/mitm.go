@@ -59,7 +59,7 @@ func MITM(ca tls.Certificate, inner core.Handler) core.Handler {
 		inner:  inner,
 		ca:     ca,
 		caCert: caCert,
-		cache:  &certCache{certs: make(map[string]*tls.Certificate)},
+		cache:  &CertCache{},
 	}
 	return m
 }
@@ -68,7 +68,7 @@ type mitmHandler struct {
 	inner  core.Handler
 	ca     tls.Certificate
 	caCert *x509.Certificate
-	cache  *certCache
+	cache  *CertCache
 }
 
 func (m *mitmHandler) Resolve(ctx context.Context, req *core.Request) (*core.Proxy, error) {
@@ -79,7 +79,7 @@ func (m *mitmHandler) Resolve(ctx context.Context, req *core.Request) (*core.Pro
 
 	// TLS handshake with client using a forged cert for the target host.
 	host := targetHost(req.Target)
-	cert := m.cache.getOrCreate(host, m.caCert, &m.ca)
+	cert := m.cache.GetOrCreate(host, m.caCert, &m.ca)
 
 	tlsConn := tls.Server(req.Conn, &tls.Config{
 		Certificates: []tls.Certificate{*cert},
@@ -342,12 +342,22 @@ func containsCRLFCRLF(b []byte) bool {
 // Certificate cache — forges per-host certs signed by the CA
 // ---------------------------------------------------------------------------
 
-type certCache struct {
+// CertCache caches forged per-host TLS certificates.
+type CertCache struct {
 	mu    sync.RWMutex
 	certs map[string]*tls.Certificate
 }
 
-func (c *certCache) getOrCreate(host string, caCert *x509.Certificate, caKey *tls.Certificate) *tls.Certificate {
+// GetOrCreate returns a cached certificate for host, or forges a new one.
+func (c *CertCache) GetOrCreate(host string, caCert *x509.Certificate, caKey *tls.Certificate) *tls.Certificate {
+	if c.certs == nil {
+		c.mu.Lock()
+		if c.certs == nil {
+			c.certs = make(map[string]*tls.Certificate)
+		}
+		c.mu.Unlock()
+	}
+
 	c.mu.RLock()
 	cert, ok := c.certs[host]
 	c.mu.RUnlock()
