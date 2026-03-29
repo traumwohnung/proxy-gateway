@@ -14,33 +14,6 @@ var testSource = core.HandlerFunc(func(_ context.Context, _ *core.Request) (*cor
 })
 
 // ---------------------------------------------------------------------------
-// MapAuth
-// ---------------------------------------------------------------------------
-
-func TestMapAuthSingleUser(t *testing.T) {
-	a := utils.NewMapAuth(map[string]string{"alice": "pw"})
-	if err := a.Authenticate("alice", "pw"); err != nil {
-		t.Fatal(err)
-	}
-	if err := a.Authenticate("alice", "wrong"); err == nil {
-		t.Fatal("expected error")
-	}
-}
-
-func TestMapAuthMultiUser(t *testing.T) {
-	a := utils.NewMapAuth(map[string]string{"alice": "pw1", "bob": "pw2"})
-	if err := a.Authenticate("alice", "pw1"); err != nil {
-		t.Fatal(err)
-	}
-	if err := a.Authenticate("bob", "pw2"); err != nil {
-		t.Fatal(err)
-	}
-	if err := a.Authenticate("charlie", "pw"); err == nil {
-		t.Fatal("expected error for unknown user")
-	}
-}
-
-// ---------------------------------------------------------------------------
 // ParseJSONCreds
 // ---------------------------------------------------------------------------
 
@@ -67,6 +40,33 @@ func TestParseJSONCredsPopulatesContext(t *testing.T) {
 	}
 }
 
+func TestParseJSONCredsSessionKeyIsSubPlusSet(t *testing.T) {
+	var gotKey string
+	h := ParseJSONCreds(core.HandlerFunc(func(ctx context.Context, _ *core.Request) (*core.Result, error) {
+		gotKey = core.SessionKey(ctx)
+		return core.Resolved(testProxy), nil
+	}))
+	req := &core.Request{
+		RawUsername: `{"sub":"alice","set":"res","minutes":5,"meta":{}}`,
+		RawPassword: "pw",
+	}
+	h.Resolve(context.Background(), req)
+	// Key must be stable: changing minutes should not change the key.
+	req2 := &core.Request{
+		RawUsername: `{"sub":"alice","set":"res","minutes":99,"meta":{}}`,
+		RawPassword: "pw",
+	}
+	var gotKey2 string
+	h2 := ParseJSONCreds(core.HandlerFunc(func(ctx context.Context, _ *core.Request) (*core.Result, error) {
+		gotKey2 = core.SessionKey(ctx)
+		return core.Resolved(testProxy), nil
+	}))
+	h2.Resolve(context.Background(), req2)
+	if gotKey != gotKey2 {
+		t.Fatalf("session key changed when only minutes changed: %q vs %q", gotKey, gotKey2)
+	}
+}
+
 func TestParseJSONCredsRejectsEmptyUsername(t *testing.T) {
 	h := ParseJSONCreds(testSource)
 	if _, err := h.Resolve(context.Background(), &core.Request{}); err == nil {
@@ -83,8 +83,50 @@ func TestParseJSONCredsRejectsInvalidJSON(t *testing.T) {
 
 func TestParseJSONCredsRejectsMissingSub(t *testing.T) {
 	h := ParseJSONCreds(testSource)
-	if _, err := h.Resolve(context.Background(), &core.Request{RawUsername: `{"set":"res","minutes":0,"meta":{}}`}); err == nil {
+	if _, err := h.Resolve(context.Background(), &core.Request{
+		RawUsername: `{"set":"res","minutes":0,"meta":{}}`,
+	}); err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Config auth resolution
+// ---------------------------------------------------------------------------
+
+func TestConfigAuthUsersMapTakesPrecedence(t *testing.T) {
+	cfg := &Config{
+		AuthSub:      "ignored",
+		AuthPassword: "ignored",
+		Users:        map[string]string{"alice": "pw1", "bob": "pw2"},
+	}
+	users, err := cfg.authUsers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if users["alice"] != "pw1" || users["bob"] != "pw2" {
+		t.Fatal("expected users map")
+	}
+	if _, ok := users["ignored"]; ok {
+		t.Fatal("auth_sub should be ignored when users is set")
+	}
+}
+
+func TestConfigAuthFallsBackToSubPassword(t *testing.T) {
+	cfg := &Config{AuthSub: "alice", AuthPassword: "pw"}
+	users, err := cfg.authUsers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if users["alice"] != "pw" {
+		t.Fatal("expected single-user map from auth_sub/auth_password")
+	}
+}
+
+func TestConfigAuthRequiresCredentials(t *testing.T) {
+	cfg := &Config{}
+	if _, err := cfg.authUsers(); err == nil {
+		t.Fatal("expected error when no auth configured")
 	}
 }
 
@@ -109,19 +151,20 @@ func TestFullPipeline(t *testing.T) {
 		t.Fatalf("expected proxy, got err=%v", err)
 	}
 
+	// Same sub+set → same sticky session.
 	r2, _ := pipeline.Resolve(context.Background(), &core.Request{
-		RawUsername: `{"sub":"alice","set":"test","minutes":5,"meta":{}}`,
+		RawUsername: `{"sub":"alice","set":"test","minutes":99,"meta":{}}`,
 		RawPassword: "pw",
 	})
 	if r2.Proxy.Port != r.Proxy.Port {
-		t.Fatal("sticky should return same proxy")
+		t.Fatal("sticky should return same proxy regardless of minutes")
 	}
 
-	_, err = pipeline.Resolve(context.Background(), &core.Request{
+	// Wrong password.
+	if _, err := pipeline.Resolve(context.Background(), &core.Request{
 		RawUsername: `{"sub":"alice","set":"test","minutes":5,"meta":{}}`,
 		RawPassword: "wrong",
-	})
-	if err == nil {
+	}); err == nil {
 		t.Fatal("expected auth error")
 	}
 }

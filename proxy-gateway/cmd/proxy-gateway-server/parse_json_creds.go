@@ -44,7 +44,8 @@ func ParseJSONCreds(next core.Handler) core.Handler {
 		ctx = core.WithSet(ctx, parsed.Set)
 		ctx = core.WithSessionTTL(ctx, parsed.Minutes)
 		ctx = core.WithMeta(ctx, core.Meta(parsed.Meta))
-		ctx = core.WithSessionKey(ctx, req.RawUsername) // stable key for affinity
+		// Session key is sub+set — stable across requests even if minutes changes.
+		ctx = core.WithSessionKey(ctx, parsed.Sub+"\x00"+parsed.Set)
 
 		return next.Resolve(ctx, req)
 	})
