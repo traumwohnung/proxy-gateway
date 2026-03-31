@@ -1,6 +1,6 @@
 # Proxy Gateway — Local Development Configuration
 #
-# Usage: cargo run
+# Usage: go run ./proxy-gateway
 #
 # Clients use Proxy-Authorization with username format:
 #   <proxyset>-<minutes>-<sessionkey>

@@ -29,11 +29,11 @@ jobs:
           version: latest
 
       - name: Install dependencies
-        working-directory: proxy-gateway-client
+        working-directory: proxy-gateway-client-ts
         run: pnpm install
 
       - name: Publish to GitHub Packages
-        working-directory: proxy-gateway-client
+        working-directory: proxy-gateway-client-ts
         run: pnpm publish --access public --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,7 +1,7 @@
 {
     "name": "proxy-gateway-workspace",
     "private": true,
-    "workspaces": ["proxy-gateway-client"],
+    "workspaces": ["proxy-gateway-client-ts"],
     "devDependencies": {
         "@biomejs/biome": "^2.4.7",
         "lefthook": "^2.1.4"
