@@ -12,7 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	chiware "github.com/go-chi/chi/v5/middleware"
 
-	"proxy-kit"
+	proxykit "proxy-kit"
 	"proxy-kit/utils"
 )
 
@@ -47,18 +47,10 @@ func RunServer(cfg *Config, srv *Server, apiKey string) error {
 	}
 
 	// --- HTTP proxy (main listener) ---
-	r := chi.NewRouter()
-	r.Use(chiware.Recoverer)
-	proxyHandler := proxykit.HTTPProxyHandler(srv.Pipeline)
-	r.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			proxyHandler.ServeHTTP(w, r)
-		})
-	})
-
+	// Use the proxy handler directly — chi doesn't route CONNECT requests.
 	httpSrv := &http.Server{
 		Addr:    cfg.BindAddr,
-		Handler: r,
+		Handler: proxykit.HTTPProxyHandler(srv.Pipeline),
 	}
 
 	go func() {

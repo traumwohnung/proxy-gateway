@@ -71,14 +71,9 @@ func bearerAuth(apiKey string, next http.HandlerFunc) http.HandlerFunc {
 }
 
 func decodeBase64Username(encoded string) (*Username, error) {
-	raw, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil {
-		raw, err = base64.URLEncoding.DecodeString(encoded)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return ParseUsername(string(raw))
+	// The URL parameter is the base64 username produced by the client.
+	// ParseUsername already handles base64 → JSON decoding.
+	return ParseUsername(encoded)
 }
 
 // ---------------------------------------------------------------------------

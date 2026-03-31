@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -21,12 +22,24 @@ type Username struct {
 
 // ParseUsername parses a raw JSON username string.
 func ParseUsername(raw string) (*Username, error) {
+	// Accept both raw JSON and base64-encoded JSON (as produced by the client SDKs).
+	jsonBytes := []byte(raw)
+	if len(raw) > 0 && raw[0] != '{' {
+		decoded, err := base64.StdEncoding.DecodeString(raw)
+		if err != nil {
+			decoded, err = base64.URLEncoding.DecodeString(raw)
+			if err != nil {
+				return nil, fmt.Errorf("username is neither JSON nor valid base64: %w", err)
+			}
+		}
+		jsonBytes = decoded
+	}
 	var j struct {
 		Set     string                 `json:"set"`
 		Minutes int                    `json:"minutes"`
 		Meta    map[string]interface{} `json:"meta"`
 	}
-	if err := json.Unmarshal([]byte(raw), &j); err != nil {
+	if err := json.Unmarshal(jsonBytes, &j); err != nil {
 		return nil, fmt.Errorf("username is not valid JSON: %w", err)
 	}
 	if j.Set == "" {
@@ -35,7 +48,7 @@ func ParseUsername(raw string) (*Username, error) {
 	return &Username{
 		Affinity: AffinityParams{Set: j.Set, Meta: j.Meta},
 		Minutes:  j.Minutes,
-		Raw:      raw,
+		Raw:      string(jsonBytes),
 	}, nil
 }
 
