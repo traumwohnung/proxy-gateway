@@ -55,6 +55,60 @@ export const verifyResultSchema = z.object({
 export type VerifyResult = z.infer<typeof verifyResultSchema>;
 
 // ---------------------------------------------------------------------------
+// Usage query types
+// ---------------------------------------------------------------------------
+
+export const granularitySchema = z.enum(["hour", "day", "proxyset", "total"]);
+export type Granularity = z.infer<typeof granularitySchema>;
+
+export interface UsageFilter {
+    /** Filter by hour_ts >= from (ISO 8601, e.g. "2026-01-15T00:00:00Z"). */
+    from?: string;
+    /** Filter by hour_ts <= to (ISO 8601). */
+    to?: string;
+    /** Exact proxy set name filter. */
+    proxyset?: string;
+    /**
+     * JSONB containment filter on affinity_params.
+     * Pass a JSON object string, e.g. `{"user":"alice"}`.
+     * Matches any row whose affinity_params contains all the given key/values.
+     */
+    meta?: string;
+    /** Controls GROUP BY aggregation. Defaults to "hour". */
+    granularity?: Granularity;
+    /** 1-indexed page number. Defaults to 1. */
+    page?: number;
+    /** Rows per page. Defaults to 100, max 1000. */
+    pageSize?: number;
+}
+
+export const usageRowSchema = z.object({
+    /** Set when granularity="hour" (ISO 8601 UTC). */
+    hour_ts: z.string().optional(),
+    /** Set when granularity="day" (YYYY-MM-DD). */
+    day: z.string().optional(),
+    /** Set for granularity="hour", "day", "proxyset". */
+    proxyset: z.string().optional(),
+    /** Set for granularity="hour" — raw JSONB string. */
+    affinity_params: z.string().optional(),
+    upload_bytes: z.number().int().nonnegative(),
+    download_bytes: z.number().int().nonnegative(),
+    total_bytes: z.number().int().nonnegative(),
+});
+
+export type UsageRow = z.infer<typeof usageRowSchema>;
+
+export const usageResponseSchema = z.object({
+    rows: z.array(usageRowSchema),
+    total_count: z.number().int().nonnegative(),
+    page: z.number().int().positive(),
+    page_size: z.number().int().positive(),
+    total_pages: z.number().int().nonnegative(),
+});
+
+export type UsageResponse = z.infer<typeof usageResponseSchema>;
+
+// ---------------------------------------------------------------------------
 // Username construction helpers
 // ---------------------------------------------------------------------------
 

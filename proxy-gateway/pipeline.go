@@ -4,29 +4,34 @@ import (
 	"context"
 	"fmt"
 
-	"proxy-kit"
+	proxykit "proxy-kit"
 	"proxy-kit/utils"
+	db "proxy-gateway/db/gen"
 )
 
 // Server holds the assembled pipeline and all introspection handles.
 type Server struct {
 	Pipeline proxykit.Handler
 	Sessions *utils.SessionManager
+	Usage    *UsageTracker
+	Queries  *db.Queries // nil when DATABASE_URL is unset
 }
 
 // BuildServer assembles the full handler pipeline from config.
-func BuildServer(cfg *Config, configDir string, proxyPassword string) (*Server, error) {
+func BuildServer(cfg *Config, configDir string, proxyPassword string, tracker *UsageTracker, queries *db.Queries) (*Server, error) {
 	router, err := buildProxysetRouter(cfg, configDir)
 	if err != nil {
 		return nil, err
 	}
 
 	sessions := utils.NewSessionManager(router)
-	pipeline := PasswordAuth(proxyPassword, ParseJSONCreds(sessions))
+	pipeline := PasswordAuth(proxyPassword, ParseJSONCreds(trackUsage(tracker, sessions)))
 
 	return &Server{
 		Pipeline: pipeline,
 		Sessions: sessions,
+		Usage:    tracker,
+		Queries:  queries,
 	}, nil
 }
 
@@ -86,4 +91,26 @@ func buildProxysetRouter(cfg *Config, configDir string) (proxykit.Handler, error
 		}
 		return h.Resolve(ctx, req)
 	}), nil
+}
+
+// trackUsage wraps next and chains a usageConnTracker onto every Result so
+// that byte totals are recorded when each connection closes.
+// If tracker is nil the middleware is a no-op passthrough.
+func trackUsage(tracker *UsageTracker, next proxykit.Handler) proxykit.Handler {
+	if tracker == nil {
+		return next
+	}
+	return proxykit.HandlerFunc(func(ctx context.Context, req *proxykit.Request) (*proxykit.Result, error) {
+		result, err := next.Resolve(ctx, req)
+		if err != nil || result == nil {
+			return result, err
+		}
+		ct := &usageConnTracker{
+			tracker:        tracker,
+			proxyset:       getSet(ctx),
+			affinityParams: getAffinityJSON(ctx),
+		}
+		result.ConnTracker = proxykit.ChainTrackers(result.ConnTracker, ct)
+		return result, nil
+	})
 }

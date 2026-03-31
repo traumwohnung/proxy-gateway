@@ -14,7 +14,6 @@ import (
 	chiware "github.com/go-chi/chi/v5/middleware"
 
 	proxykit "proxy-kit"
-	"proxy-kit/utils"
 )
 
 const (
@@ -39,9 +38,14 @@ func RunServer(cfg *Config, srv *Server, apiKey string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Start usage flush loop if tracking is enabled.
+	if srv.Usage != nil {
+		go srv.Usage.Run(ctx)
+	}
+
 	// --- Admin API (separate listener, optional) ---
 	if apiKey != "" && cfg.AdminAddr != "" {
-		adminSrv := buildAdminServer(cfg.AdminAddr, srv.Sessions, apiKey)
+		adminSrv := buildAdminServer(cfg.AdminAddr, srv, apiKey)
 		go func() {
 			slog.Info("admin API listening", "addr", cfg.AdminAddr)
 			if err := adminSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -92,7 +96,7 @@ func RunServer(cfg *Config, srv *Server, apiKey string) error {
 	return nil
 }
 
-func buildAdminServer(addr string, sessions *utils.SessionManager, apiKey string) *http.Server {
+func buildAdminServer(addr string, srv *Server, apiKey string) *http.Server {
 	r := chi.NewRouter()
 	r.Use(chiware.Recoverer)
 	r.Use(func(next http.Handler) http.Handler {
@@ -102,9 +106,12 @@ func buildAdminServer(addr string, sessions *utils.SessionManager, apiKey string
 		})
 	})
 	r.Route("/api", func(r chi.Router) {
-		r.Get("/sessions", bearerAuth(apiKey, handleListSessions(sessions)))
-		r.Get("/sessions/{username}", bearerAuth(apiKey, handleGetSession(sessions)))
-		r.Post("/sessions/{username}/rotate", bearerAuth(apiKey, handleForceRotate(sessions)))
+		r.Get("/sessions", bearerAuth(apiKey, handleListSessions(srv.Sessions)))
+		r.Get("/sessions/{username}", bearerAuth(apiKey, handleGetSession(srv.Sessions)))
+		r.Post("/sessions/{username}/rotate", bearerAuth(apiKey, handleForceRotate(srv.Sessions)))
+		if srv.Queries != nil {
+			r.Get("/usage", bearerAuth(apiKey, handleQueryUsage(srv.Queries)))
+		}
 	})
 	return &http.Server{
 		Addr:              addr,

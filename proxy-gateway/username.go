@@ -60,6 +60,7 @@ type ctxKey int
 
 const (
 	ctxSet ctxKey = iota
+	ctxAffinityJSON
 )
 
 func withSet(ctx context.Context, set string) context.Context {
@@ -68,6 +69,15 @@ func withSet(ctx context.Context, set string) context.Context {
 
 func getSet(ctx context.Context) string {
 	v, _ := ctx.Value(ctxSet).(string)
+	return v
+}
+
+func withAffinityJSON(ctx context.Context, json string) context.Context {
+	return context.WithValue(ctx, ctxAffinityJSON, json)
+}
+
+func getAffinityJSON(ctx context.Context) string {
+	v, _ := ctx.Value(ctxAffinityJSON).(string)
 	return v
 }
 
@@ -88,6 +98,7 @@ func ParseJSONCreds(next proxykit.Handler) proxykit.Handler {
 		}
 
 		ctx = withSet(ctx, u.Affinity.Set)
+		ctx = withAffinityJSON(ctx, u.Affinity.CanonicalJSON())
 		ctx = utils.WithSeedTTL(ctx, time.Duration(u.Minutes)*time.Minute)
 		ctx = utils.WithTopLevelSeed(ctx, u.Affinity.Seed())
 		ctx = utils.WithSessionLabel(ctx, u.Raw)

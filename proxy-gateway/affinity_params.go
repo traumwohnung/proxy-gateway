@@ -21,6 +21,13 @@ func (a *AffinityParams) Seed() uint64 {
 	return proxykit.TopLevelSeed(a.Set + "\x00" + canonicalMeta(a.Meta))
 }
 
+// CanonicalJSON returns a stable JSON representation of the affinity params
+// suitable for use as a JSONB value in the usage bucket key.
+func (a *AffinityParams) CanonicalJSON() string {
+	meta := canonicalMeta(a.Meta)
+	return meta
+}
+
 // ---------------------------------------------------------------------------
 // Canonical meta serialization (sorted keys for stable hashing)
 // ---------------------------------------------------------------------------
