@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"proxy-kit"
 )
@@ -14,11 +15,13 @@ import (
 // ---------------------------------------------------------------------------
 
 // BottingtoolsConfig is the configuration for the bottingtools proxy source.
+// Product is stored as the raw (flat) representation that TOML/YAML can decode
+// directly; NewBottingtoolsSource converts it to the typed BottingtoolsProductConfig.
 type BottingtoolsConfig struct {
-	Username    string                    `toml:"username"     yaml:"username"     json:"username"`
-	PasswordEnv string                    `toml:"password_env" yaml:"password_env" json:"password_env"`
-	Host        string                    `toml:"host"         yaml:"host"         json:"host"`
-	Product     BottingtoolsProductConfig `toml:"product"      yaml:"product"      json:"product"`
+	Username    string                       `toml:"username"     yaml:"username"     json:"username"`
+	PasswordEnv string                       `toml:"password_env" yaml:"password_env" json:"password_env"`
+	Host        string                       `toml:"host"         yaml:"host"         json:"host"`
+	Product     BottingtoolsRawProductConfig `toml:"product"      yaml:"product"      json:"product"`
 }
 
 // BottingtoolsProductConfig holds the product type and its specific parameters.
@@ -123,18 +126,22 @@ func NewBottingtoolsSource(cfg *BottingtoolsConfig) (*BottingtoolsSource, error)
 	if password == "" {
 		return nil, fmt.Errorf("environment variable %q not set or empty", cfg.PasswordEnv)
 	}
+	product, err := ParseBottingtoolsProductConfig(cfg.Product)
+	if err != nil {
+		return nil, fmt.Errorf("invalid product config: %w", err)
+	}
 	return &BottingtoolsSource{
 		accountUser: cfg.Username,
 		password:    password,
 		host:        cfg.Host,
-		product:     cfg.Product,
+		product:     product,
 	}, nil
 }
 
 // Resolve implements proxykit.Handler.
 func (s *BottingtoolsSource) Resolve(ctx context.Context, _ *proxykit.Request) (*proxykit.Result, error) {
 	seed := proxykit.GetSessionSeed(ctx)
-	username := btBuildUsername(s.accountUser, s.product, GetMeta(ctx), seed)
+	username := btBuildUsername(s.accountUser, s.product, GetMeta(ctx), GetSeedTTL(ctx), seed)
 	return proxykit.Resolved(&proxykit.Proxy{
 		Host:     s.host,
 		Port:     1337,
@@ -161,12 +168,12 @@ func (s *BottingtoolsSource) Describe() string {
 // Username building
 // ---------------------------------------------------------------------------
 
-func btBuildUsername(accountUser string, product BottingtoolsProductConfig, meta Meta, seed *proxykit.SessionSeed) string {
+func btBuildUsername(accountUser string, product BottingtoolsProductConfig, meta Meta, ttl time.Duration, seed *proxykit.SessionSeed) string {
 	switch product.Type {
 	case "residential":
-		return btBuildResidential(accountUser, product.Residential, meta, seed)
+		return btBuildResidential(accountUser, product.Residential, meta, ttl, seed)
 	case "isp":
-		return btBuildISP(accountUser, product.ISP, meta, seed)
+		return btBuildISP(accountUser, product.ISP, meta, ttl, seed)
 	case "datacenter":
 		return btBuildDatacenter(accountUser, product.Datacenter, seed)
 	default:
@@ -174,7 +181,7 @@ func btBuildUsername(accountUser string, product BottingtoolsProductConfig, meta
 	}
 }
 
-func btBuildResidential(accountUser string, cfg *BottingtoolsResidentialConfig, meta Meta, seed *proxykit.SessionSeed) string {
+func btBuildResidential(accountUser string, cfg *BottingtoolsResidentialConfig, meta Meta, ttl time.Duration, seed *proxykit.SessionSeed) string {
 	parts := []string{fmt.Sprintf("%s_pool-custom_type-%s", accountUser, cfg.Quality.AsTypeStr())}
 	if country := pickCountry(cfg.Countries, seed); country != "" {
 		parts = append(parts, fmt.Sprintf("country-%s", strings.ToUpper(country.AsParamStr())))
@@ -183,7 +190,7 @@ func btBuildResidential(accountUser string, cfg *BottingtoolsResidentialConfig, 
 		parts = append(parts, fmt.Sprintf("city-%s", cfg.City))
 	}
 	parts = append(parts, fmt.Sprintf("session-%s", deriveSessionID(seed)))
-	if v := btSesstimeStr(meta); v != "" {
+	if v := btSesstimeStr(meta, ttl); v != "" {
 		parts = append(parts, fmt.Sprintf("sesstime-%s", v))
 	}
 	if meta.GetString("fastmode") == "true" {
@@ -192,13 +199,13 @@ func btBuildResidential(accountUser string, cfg *BottingtoolsResidentialConfig, 
 	return strings.Join(parts, "_")
 }
 
-func btBuildISP(accountUser string, cfg *BottingtoolsISPConfig, meta Meta, seed *proxykit.SessionSeed) string {
+func btBuildISP(accountUser string, cfg *BottingtoolsISPConfig, meta Meta, ttl time.Duration, seed *proxykit.SessionSeed) string {
 	parts := []string{fmt.Sprintf("%s_pool-isp", accountUser)}
 	if country := pickCountry(cfg.Countries, seed); country != "" {
 		parts = append(parts, fmt.Sprintf("country-%s", country.AsParamStr()))
 	}
 	parts = append(parts, fmt.Sprintf("session-%s", deriveSessionID(seed)))
-	if v := btSesstimeStr(meta); v != "" {
+	if v := btSesstimeStr(meta, ttl); v != "" {
 		parts = append(parts, fmt.Sprintf("sesstime-%s", v))
 	}
 	return strings.Join(parts, "_")
@@ -212,9 +219,12 @@ func btBuildDatacenter(accountUser string, cfg *BottingtoolsDatacenterConfig, se
 	return strings.Join(parts, "_")
 }
 
-func btSesstimeStr(meta Meta) string {
+func btSesstimeStr(meta Meta, ttl time.Duration) string {
 	v := meta["sesstime"]
 	if v == nil {
+		if ttl > 0 {
+			return fmt.Sprintf("%d", int(ttl/time.Minute))
+		}
 		return ""
 	}
 	switch vv := v.(type) {
