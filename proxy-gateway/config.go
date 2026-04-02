@@ -32,6 +32,7 @@ type ProxySetConfig struct {
 	StaticFile   *utils.StaticFileConfig   `toml:"static_file"  yaml:"static_file"  json:"static_file"`
 	Bottingtools *utils.BottingtoolsConfig `toml:"bottingtools" yaml:"bottingtools" json:"bottingtools"`
 	Geonode      *utils.GeonodeConfig      `toml:"geonode"      yaml:"geonode"      json:"geonode"`
+	ProxyingIO   *utils.ProxyingIOConfig   `toml:"proxyingio"   yaml:"proxyingio"   json:"proxyingio"`
 }
 
 // LoadConfig reads and parses a TOML, YAML, or JSON config file.

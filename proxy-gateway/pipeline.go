@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	db "proxy-gateway/db/gen"
 	proxykit "proxy-kit"
 	"proxy-kit/utils"
-	db "proxy-gateway/db/gen"
 )
 
 // Server holds the assembled pipeline and all introspection handles.
@@ -73,8 +73,14 @@ func buildProxysetRouter(cfg *Config, configDir string) (proxykit.Handler, error
 			}
 			src, err = utils.NewGeonodeSource(c)
 
+		case "proxyingio":
+			if raw.ProxyingIO == nil {
+				return nil, fmt.Errorf("proxy set %q: proxyingio source requires a [proxyingio] section", raw.Name)
+			}
+			src, err = utils.NewProxyingIOSource(raw.ProxyingIO)
+
 		default:
-			return nil, fmt.Errorf("proxy set %q: unknown source type %q (supported: static_file, bottingtools, geonode)", raw.Name, raw.SourceType)
+			return nil, fmt.Errorf("proxy set %q: unknown source type %q (supported: static_file, bottingtools, geonode, proxyingio)", raw.Name, raw.SourceType)
 		}
 
 		if err != nil {

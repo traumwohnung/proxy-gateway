@@ -29,6 +29,7 @@ import "proxy-kit/utils"    // reusable utilities, providers, SessionManager
 4. [Proxy Sources](#proxy-sources)
    - [Static File](#static-file)
    - [Bottingtools](#bottingtools)
+   - [ProxyingIO](#proxyingio)
    - [Geonode](#geonode)
    - [Writing Your Own Source](#writing-your-own-source)
 5. [Utilities](#utilities)
@@ -367,7 +368,7 @@ Under the hood, it's just a custom `Interceptor` plugged into `proxykit.MITM`.
 
 A proxy source is just a `Handler` that returns a `Result` with a `Proxy`. Sources receive a `*proxykit.SessionSeed` via context — they use it for deterministic choices when non-nil, and fall back to their own randomization when nil.
 
-The framework ships three sources in `proxy-kit/utils`:
+The framework ships four sources in `proxy-kit/utils`:
 
 ### Static File
 
@@ -395,6 +396,17 @@ Connects to the Bottingtools proxy API. Supports residential (low/high quality),
 **Seed behavior:**
 - `nil` seed → random session ID and random country pick on every `Resolve()`
 - non-nil seed → deterministic session ID (`seed.DeriveStringKey(hex, 16)`) and deterministic country pick (`seed.Pick(len(countries))`)
+
+### ProxyingIO
+
+Connects to the proxying.io gateway. Supports `http` and `socks5` upstream protocols. The upstream username stays fixed; sticky requests encode `session-*` and `lifetime-*` into the upstream password, while non-sticky requests omit both. Country targeting and `quality-high` are optional password suffixes, and multiple countries are encoded as a comma-separated list like `country-AQ,AD`.
+
+**Seed behavior:**
+- `nil` seed → no `session-*` / `lifetime-*`
+- non-nil seed → deterministic session ID
+- `GetSeedTTL(ctx)` overrides the password `lifetime-*` segment for sticky requests; otherwise the source uses `default_lifetime` (default: `60`)
+- `high_quality = true` appends `_quality-high`; omitted means no quality filter
+- `protocol = "http"` is the default and uses port `8080`; `protocol = "socks5"` defaults to port `1080`
 
 ### Geonode
 
@@ -498,6 +510,7 @@ proxy-kit/
     ├── tls_fingerprint_spoofing.go # TLS fingerprint spoofing via httpcloak
     ├── provider_static_file.go    # Static file proxy source (seed-aware pool selection)
     ├── provider_bottingtools.go   # Bottingtools proxy source (seed-aware session IDs)
+    ├── provider_proxyingio.go     # proxying.io source (session data encoded in password)
     └── provider_geonode.go        # Geonode proxy source (seed-aware session IDs)
 ```
 

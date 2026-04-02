@@ -23,7 +23,7 @@ Client ──SOCKS5────────→
 
 - **No TLS termination** — raw bytes are relayed through CONNECT tunnels. The client's own TLS handshake reaches the destination untouched.
 - **Multi-protocol** — listens for both HTTP proxy (CONNECT + plain HTTP forwarding) and SOCKS5 on separate ports.
-- **Pluggable proxy sources** — each proxy set declares a `source_type`. Supported: `static_file`, `bottingtools`, `geonode`.
+- **Pluggable proxy sources** — each proxy set declares a `source_type`. Supported: `static_file`, `bottingtools`, `proxyingio`, `geonode`.
 - **Multiple proxy sets** — each with its own source and rotation strategy.
 - **Least-used rotation** — requests go to the proxy with the lowest use count.
 - **Session affinity** — pin a session to the same upstream proxy for a configurable duration (0–1440 minutes), encoded in the username.
@@ -74,6 +74,22 @@ Fetches proxies from the Bottingtools API.
 ```toml
 [proxy_set.bottingtools]
 api_key = "..."
+```
+
+#### `proxyingio`
+
+Builds proxying.io credentials from a fixed upstream username plus a password suffix. Sticky requests include `session-*` and `lifetime-*`; non-sticky requests omit them. Optional `country-*` and `quality-high` can be appended in either mode, and multiple countries are encoded as a comma-separated list like `country-AQ,AD`.
+
+```toml
+[proxy_set.proxyingio]
+username         = "Swu2HZpm"
+password_env     = "PROXYINGIO_PASSWORD"
+host             = "proxy.proxying.io" # optional, default shown
+protocol         = "http"              # optional: "http" (default) or "socks5"
+port             = 8080                # optional; defaults to 8080 for http, 1080 for socks5
+countries        = ["DE"]              # optional
+high_quality     = true                # optional; omit for no quality filter
+default_lifetime = 60
 ```
 
 #### `geonode`

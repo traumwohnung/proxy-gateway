@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"proxy-kit"
 	"proxy-kit/utils"
 )
+
+func ptrBool(v bool) *bool { return &v }
 
 var testProxy = &proxykit.Proxy{Host: "upstream", Port: 8080}
 var testSource = proxykit.HandlerFunc(func(_ context.Context, _ *proxykit.Request) (*proxykit.Result, error) {
@@ -235,6 +238,77 @@ func TestFullPipelineNilSeedWithoutAffinity(t *testing.T) {
 	}
 	if gotSeed != nil {
 		t.Fatal("minutes=0 should result in nil seed")
+	}
+}
+
+func TestBuildProxysetRouterSupportsProxyingIO(t *testing.T) {
+	t.Setenv("PROXYINGIO_TEST_PASSWORD", "basepw")
+
+	router, err := buildProxysetRouter(&Config{
+		ProxySets: []ProxySetConfig{{
+			Name:       "proxying",
+			SourceType: "proxyingio",
+			ProxyingIO: &utils.ProxyingIOConfig{
+				Username:    "account",
+				PasswordEnv: "PROXYINGIO_TEST_PASSWORD",
+				Countries:   []utils.Country{"DE"},
+				HighQuality: ptrBool(true),
+			},
+		}},
+	}, ".")
+	if err != nil {
+		t.Fatalf("build router: %v", err)
+	}
+
+	ctx := withSet(context.Background(), "proxying")
+	ctx = utils.WithSeedTTL(ctx, 5*time.Minute)
+	ctx = proxykit.WithSessionSeed(ctx, proxykit.NewSessionSeed(1, 0))
+
+	result, err := router.Resolve(ctx, &proxykit.Request{})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if result.Proxy.Username != "account" {
+		t.Fatalf("expected proxyingio username, got %q", result.Proxy.Username)
+	}
+	if result.Proxy.Port != 8080 {
+		t.Fatalf("expected proxyingio default port, got %d", result.Proxy.Port)
+	}
+	if result.Proxy.Password == "" || !strings.Contains(result.Proxy.Password, "_quality-high") {
+		t.Fatalf("expected quality-high password suffix, got %q", result.Proxy.Password)
+	}
+}
+
+func TestBuildProxysetRouterSupportsProxyingIOSocks5(t *testing.T) {
+	t.Setenv("PROXYINGIO_TEST_PASSWORD", "basepw")
+
+	router, err := buildProxysetRouter(&Config{
+		ProxySets: []ProxySetConfig{{
+			Name:       "proxying-socks5",
+			SourceType: "proxyingio",
+			ProxyingIO: &utils.ProxyingIOConfig{
+				Username:    "account",
+				PasswordEnv: "PROXYINGIO_TEST_PASSWORD",
+				Protocol:    utils.ProxyingIOProtocolSocks5,
+				Countries:   []utils.Country{"AQ"},
+				HighQuality: ptrBool(true),
+			},
+		}},
+	}, ".")
+	if err != nil {
+		t.Fatalf("build router: %v", err)
+	}
+
+	ctx := withSet(context.Background(), "proxying-socks5")
+	result, err := router.Resolve(ctx, &proxykit.Request{})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if result.Proxy.Proto() != proxykit.ProtocolSOCKS5 {
+		t.Fatalf("expected socks5 protocol, got %q", result.Proxy.Proto())
+	}
+	if result.Proxy.Port != 1080 {
+		t.Fatalf("expected socks5 port, got %d", result.Proxy.Port)
 	}
 }
 
