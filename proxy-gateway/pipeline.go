@@ -79,8 +79,14 @@ func buildProxysetRouter(cfg *Config, configDir string) (proxykit.Handler, error
 			}
 			src, err = utils.NewProxyingIOSource(raw.ProxyingIO)
 
+		case "webshare":
+			if raw.Webshare == nil {
+				return nil, fmt.Errorf("proxy set %q: webshare source requires a [webshare] section", raw.Name)
+			}
+			src, err = utils.NewWebshareSource(raw.Webshare)
+
 		default:
-			return nil, fmt.Errorf("proxy set %q: unknown source type %q (supported: static_file, bottingtools, geonode, proxyingio)", raw.Name, raw.SourceType)
+			return nil, fmt.Errorf("proxy set %q: unknown source type %q (supported: static_file, bottingtools, geonode, proxyingio, webshare)", raw.Name, raw.SourceType)
 		}
 
 		if err != nil {

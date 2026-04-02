@@ -312,6 +312,37 @@ func TestBuildProxysetRouterSupportsProxyingIOSocks5(t *testing.T) {
 	}
 }
 
+func TestBuildProxysetRouterSupportsWebshare(t *testing.T) {
+	t.Setenv("WEBSHARE_TEST_PASSWORD", "pw")
+
+	router, err := buildProxysetRouter(&Config{
+		ProxySets: []ProxySetConfig{{
+			Name:       "webshare",
+			SourceType: "webshare",
+			Webshare: &utils.WebshareConfig{
+				Username:    "trlvvxfs",
+				Amount:      20,
+				PasswordEnv: "WEBSHARE_TEST_PASSWORD",
+			},
+		}},
+	}, ".")
+	if err != nil {
+		t.Fatalf("build router: %v", err)
+	}
+
+	ctx := withSet(context.Background(), "webshare")
+	result, err := router.Resolve(ctx, &proxykit.Request{})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if result.Proxy.Host != "p.webshare.io" || result.Proxy.Port != 80 {
+		t.Fatalf("unexpected webshare proxy: %+v", result.Proxy)
+	}
+	if result.Proxy.Password != "pw" {
+		t.Fatalf("unexpected webshare password: %q", result.Proxy.Password)
+	}
+}
+
 func TestForceRotateChangesSeed(t *testing.T) {
 	var seeds []*proxykit.SessionSeed
 	source := proxykit.HandlerFunc(func(ctx context.Context, _ *proxykit.Request) (*proxykit.Result, error) {

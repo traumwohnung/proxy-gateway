@@ -30,6 +30,7 @@ import "proxy-kit/utils"    // reusable utilities, providers, SessionManager
    - [Static File](#static-file)
    - [Bottingtools](#bottingtools)
    - [ProxyingIO](#proxyingio)
+   - [Webshare](#webshare)
    - [Geonode](#geonode)
    - [Writing Your Own Source](#writing-your-own-source)
 5. [Utilities](#utilities)
@@ -368,7 +369,7 @@ Under the hood, it's just a custom `Interceptor` plugged into `proxykit.MITM`.
 
 A proxy source is just a `Handler` that returns a `Result` with a `Proxy`. Sources receive a `*proxykit.SessionSeed` via context — they use it for deterministic choices when non-nil, and fall back to their own randomization when nil.
 
-The framework ships four sources in `proxy-kit/utils`:
+The framework ships five sources in `proxy-kit/utils`:
 
 ### Static File
 
@@ -407,6 +408,14 @@ Connects to the proxying.io gateway. Supports `http` and `socks5` upstream proto
 - `GetSeedTTL(ctx)` overrides the password `lifetime-*` segment for sticky requests; otherwise the source uses `default_lifetime` (default: `60`)
 - `high_quality = true` appends `_quality-high`; omitted means no quality filter
 - `protocol = "http"` is the default and uses port `8080`; `protocol = "socks5"` defaults to port `1080`
+
+### Webshare
+
+Generates a fixed Webshare proxy pool from `username-1` through `username-N` on `p.webshare.io:80`, using a shared password from `password_env`.
+
+**Seed behavior:**
+- `nil` seed → least-used rotation with random tie-breaking across the generated pool
+- non-nil seed → least-used rotation with deterministic tie-breaking, so the same seed picks the same generated username when counts are equal
 
 ### Geonode
 
@@ -511,6 +520,7 @@ proxy-kit/
     ├── provider_static_file.go    # Static file proxy source (seed-aware pool selection)
     ├── provider_bottingtools.go   # Bottingtools proxy source (seed-aware session IDs)
     ├── provider_proxyingio.go     # proxying.io source (session data encoded in password)
+    ├── provider_webshare.go       # Webshare generated pool source
     └── provider_geonode.go        # Geonode proxy source (seed-aware session IDs)
 ```
 

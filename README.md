@@ -23,7 +23,7 @@ Client ──SOCKS5────────→
 
 - **No TLS termination** — raw bytes are relayed through CONNECT tunnels. The client's own TLS handshake reaches the destination untouched.
 - **Multi-protocol** — listens for both HTTP proxy (CONNECT + plain HTTP forwarding) and SOCKS5 on separate ports.
-- **Pluggable proxy sources** — each proxy set declares a `source_type`. Supported: `static_file`, `bottingtools`, `proxyingio`, `geonode`.
+- **Pluggable proxy sources** — each proxy set declares a `source_type`. Supported: `static_file`, `bottingtools`, `proxyingio`, `webshare`, `geonode`.
 - **Multiple proxy sets** — each with its own source and rotation strategy.
 - **Least-used rotation** — requests go to the proxy with the lowest use count.
 - **Session affinity** — pin a session to the same upstream proxy for a configurable duration (0–1440 minutes), encoded in the username.
@@ -90,6 +90,17 @@ port             = 8080                # optional; defaults to 8080 for http, 10
 countries        = ["DE"]              # optional
 high_quality     = true                # optional; omit for no quality filter
 default_lifetime = 60
+```
+
+#### `webshare`
+
+Generates a fixed Webshare pool from sequential usernames on `p.webshare.io:80`.
+
+```toml
+[proxy_set.webshare]
+username     = "trlvvxfs"
+amount       = 20
+password_env = "WEBSHARE_PASSWORD"
 ```
 
 #### `geonode`
