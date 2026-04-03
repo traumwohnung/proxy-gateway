@@ -1,6 +1,7 @@
 package proxykit
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -10,6 +11,36 @@ import (
 	"strings"
 	"time"
 )
+
+// bufferedConn wraps a net.Conn with a bufio.Reader so that any bytes the
+// net/http server already read ahead (e.g. a coalesced TLS ClientHello that
+// arrived in the same TCP segment as the CONNECT request) are replayed before
+// reads fall through to the raw connection.
+type bufferedConn struct {
+	net.Conn
+	r *bufio.Reader
+}
+
+func (c *bufferedConn) Read(b []byte) (int, error) { return c.r.Read(b) }
+
+// CloseWrite delegates to the underlying conn so relay() can still half-close
+// the TCP connection after the upstream finishes sending.
+func (c *bufferedConn) CloseWrite() error {
+	type closeWriter interface{ CloseWrite() error }
+	if cw, ok := c.Conn.(closeWriter); ok {
+		return cw.CloseWrite()
+	}
+	return nil
+}
+
+// newClientConn wraps the hijacked conn + bufio so buffered bytes aren't lost.
+// If the bufio has no buffered data it returns the raw conn directly.
+func newClientConn(conn net.Conn, bufrw *bufio.ReadWriter) net.Conn {
+	if bufrw.Reader.Buffered() == 0 {
+		return conn
+	}
+	return &bufferedConn{Conn: conn, r: bufrw.Reader}
+}
 
 // HTTPDownstream is an HTTP proxy listener. It accepts both CONNECT tunnels and
 // plain HTTP forwarding requests.
@@ -124,11 +155,12 @@ func (d *HTTPDownstream) serveConnect(w http.ResponseWriter, r *http.Request, ra
 	// before it can resolve. Hijack first, send 200, then re-resolve with conn.
 	if result != nil && result.NeedsConn {
 		w.WriteHeader(http.StatusOK)
-		clientConn, _, err := hj.Hijack()
+		rawConn, bufrw, err := hj.Hijack()
 		if err != nil {
 			slog.Error("hijack failed", "err", err)
 			return
 		}
+		clientConn := newClientConn(rawConn, bufrw)
 		defer clientConn.Close()
 		req.Conn = clientConn
 		result, err = handler.Resolve(connectCtx, req)
@@ -178,14 +210,29 @@ func (d *HTTPDownstream) serveConnect(w http.ResponseWriter, r *http.Request, ra
 		return
 	}
 
-	// Everything is good — now hijack and send 200.
-	w.WriteHeader(http.StatusOK)
-	clientConn, _, err := hj.Hijack()
+	// Everything is good — now hijack and write the 200 response directly.
+	// We intentionally bypass w.WriteHeader() here: net/http would append a
+	// Date header whose bytes, in the unlikely event of a split TCP delivery,
+	// could confuse clients that do a single Read() to consume the CONNECT
+	// response.  Writing raw also avoids net/http touching the conn after
+	// hijack.
+	rawConn, bufrw, err := hj.Hijack()
 	if err != nil {
 		slog.Error("hijack failed", "err", err)
 		upstreamConn.Close()
 		return
 	}
+	// Flush anything net/http may have buffered, then send the 200 ourselves.
+	_ = bufrw.Flush()
+	if _, err := rawConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
+		slog.Error("write 200 failed", "err", err)
+		rawConn.Close()
+		upstreamConn.Close()
+		return
+	}
+	// Wrap with buffered reader so any bytes the http server read ahead
+	// (e.g. coalesced TLS ClientHello) are not silently dropped.
+	clientConn := newClientConn(rawConn, bufrw)
 	defer clientConn.Close()
 	defer upstreamConn.Close()
 

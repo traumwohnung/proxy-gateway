@@ -6,6 +6,17 @@ import (
 	"time"
 )
 
+type closeWriter interface{ CloseWrite() error }
+
+// closeWrite sends a TCP half-close if the conn supports it.
+// Using an interface instead of a *net.TCPConn assertion means wrapper types
+// (e.g. bufferedConn) that delegate CloseWrite() also work correctly.
+func closeWrite(conn net.Conn) {
+	if cw, ok := conn.(closeWriter); ok {
+		_ = cw.CloseWrite()
+	}
+}
+
 // countingReader wraps an io.Reader and calls RecordTraffic on every Read.
 type countingReader struct {
 	r        io.Reader
@@ -44,16 +55,12 @@ func relay(client, upstream net.Conn, handle ConnTracker) (sent, received int64)
 	recvCh := make(chan result, 1)
 	go func() {
 		n, err := io.Copy(upstream, clientReader)
-		if tc, ok := upstream.(*net.TCPConn); ok {
-			_ = tc.CloseWrite()
-		}
+		closeWrite(upstream)
 		sentCh <- result{n, err}
 	}()
 	go func() {
 		n, err := io.Copy(client, upstreamReader)
-		if tc, ok := client.(*net.TCPConn); ok {
-			_ = tc.CloseWrite()
-		}
+		closeWrite(client)
 		recvCh <- result{n, err}
 	}()
 
