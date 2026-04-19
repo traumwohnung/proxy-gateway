@@ -31,6 +31,11 @@ type HTTPCloakSpec struct {
 	JA3 string `json:"ja3,omitempty"`
 	// Akamai overrides the preset's HTTP/2 fingerprint (advanced).
 	Akamai string `json:"akamai,omitempty"`
+	// ECH controls Encrypted Client Hello (hides SNI from network observers):
+	//   nil/true — auto-fetch ECH config from DNS (default)
+	//   false    — disable ECH
+	//   "domain" — fetch ECH config from this domain instead of target
+	ECH any `json:"ech,omitempty"`
 }
 
 // BuildUsername encodes the given parameters into a base64 proxy-gateway username.

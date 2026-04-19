@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/sardanioss/httpcloak"
+	httpcloakdns "github.com/sardanioss/httpcloak/dns"
 	"github.com/sardanioss/httpcloak/fingerprint"
 	httpcloaktransport "github.com/sardanioss/httpcloak/transport"
 	utls "github.com/sardanioss/utls"
@@ -71,6 +72,12 @@ type HTTPCloakSpec struct {
 	// PermuteExtensions randomises the TLS extension order.
 	PermuteExtensions bool `json:"permute_extensions"`
 
+	// ECH controls Encrypted Client Hello (hides SNI from network observers):
+	//   nil/true — auto-fetch ECH config from target's DNS (default)
+	//   false    — disable ECH (SNI visible in plaintext)
+	//   "domain" — fetch ECH config from this domain instead of the target
+	ECH any `json:"ech,omitempty"`
+
 	// UserAgent controls how the User-Agent header is handled:
 	//   "ignore"  — pass through the client's User-Agent unchanged (default)
 	//   "preset"  — replace with the preset's User-Agent
@@ -113,6 +120,18 @@ func ParseHTTPCloakSpec(raw json.RawMessage) (*HTTPCloakSpec, error) {
 	default:
 		return nil, fmt.Errorf("httpcloak user_agent must be \"ignore\", \"preset\", or \"check\", got %q", spec.UserAgent)
 	}
+	// Validate ECH field: nil, bool, or string.
+	if spec.ECH != nil {
+		switch spec.ECH.(type) {
+		case bool, string:
+			// valid
+		case float64:
+			// JSON numbers — reject
+			return nil, fmt.Errorf("httpcloak ech must be true, false, or a domain string")
+		default:
+			return nil, fmt.Errorf("httpcloak ech must be true, false, or a domain string, got %T", spec.ECH)
+		}
+	}
 	return &spec, nil
 }
 
@@ -131,6 +150,17 @@ func (s *HTTPCloakSpec) sessionOptions(proxyURL string, insecure bool) []httpclo
 	}
 	if insecure {
 		opts = append(opts, httpcloak.WithInsecureSkipVerify())
+	}
+	// ECH control.
+	switch v := s.ECH.(type) {
+	case bool:
+		if !v {
+			opts = append(opts, httpcloak.WithDisableECH())
+		}
+	case string:
+		if v != "" {
+			opts = append(opts, httpcloak.WithECHFrom(v))
+		}
 	}
 	// Apply custom fingerprint when any custom field is set.
 	if s.JA3 != "" || s.Akamai != "" || len(s.ALPN) > 0 || len(s.SignatureAlgorithms) > 0 || len(s.CertCompression) > 0 || s.PermuteExtensions {
@@ -335,6 +365,18 @@ func (f *tlsFingerprintInterceptor) DialTLS(ctx context.Context, target string, 
 		ServerName:         host,
 		InsecureSkipVerify: f.insecure,
 	}
+
+	// Fetch ECH config unless disabled.
+	if echDisabled, ok := f.spec.ECH.(bool); !ok || echDisabled != false {
+		echDomain := host
+		if domain, ok := f.spec.ECH.(string); ok && domain != "" {
+			echDomain = domain
+		}
+		if echConfig, err := httpcloakdns.FetchECHConfigs(ctx, echDomain); err == nil && echConfig != nil {
+			tlsConfig.EncryptedClientHelloConfigList = echConfig
+		}
+	}
+
 	tlsConn := utls.UClient(rawConn, tlsConfig, preset.ClientHelloID)
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		rawConn.Close()

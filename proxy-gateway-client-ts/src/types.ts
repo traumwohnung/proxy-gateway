@@ -125,6 +125,13 @@ export interface HTTPCloakSpec {
     ja3?: string;
     /** Override the preset's HTTP/2 fingerprint (advanced). */
     akamai?: string;
+    /**
+     * Encrypted Client Hello (hides SNI from network observers):
+     *   true (default) — auto-fetch ECH config from DNS
+     *   false — disable ECH
+     *   "domain" — fetch ECH config from this domain instead of target
+     */
+    ech?: boolean | string;
 }
 
 // ---------------------------------------------------------------------------
