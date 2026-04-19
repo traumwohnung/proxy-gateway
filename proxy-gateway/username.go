@@ -13,8 +13,8 @@ import (
 
 // Username is the parsed proxy-gateway username JSON.
 //
-//	{"set":"residential", "minutes":5, "meta":{"platform":"myapp","user":"alice"}}
-//	{"set":"direct", "httpcloak":"chrome-latest"}
+//	{"set":"residential", "minutes":5, "affinity":{"platform":"myapp","user":"alice"}}
+//	{"set":"direct", "httpcloak":{"preset":"chrome-latest"}}
 //	{"set":"direct", "httpcloak":{"preset":"chrome-latest","ja3":"771,...","akamai":"1:65536|..."}}
 type Username struct {
 	Affinity  AffinityParams
@@ -40,7 +40,7 @@ func ParseUsername(raw string) (*Username, error) {
 	var j struct {
 		Set      string                 `json:"set"`
 		Minutes  int                    `json:"minutes"`
-		Meta     map[string]interface{} `json:"meta"`
+		Affinity map[string]interface{} `json:"affinity"`
 		Httpcloak json.RawMessage       `json:"httpcloak"`
 	}
 	if err := json.Unmarshal(jsonBytes, &j); err != nil {
@@ -54,7 +54,7 @@ func ParseUsername(raw string) (*Username, error) {
 		return nil, fmt.Errorf("httpcloak: %w", err)
 	}
 	return &Username{
-		Affinity:  AffinityParams{Set: j.Set, Meta: j.Meta},
+		Affinity:  AffinityParams{Set: j.Set, Meta: j.Affinity},
 		Minutes:   j.Minutes,
 		Httpcloak: spec,
 		Raw:       string(jsonBytes),

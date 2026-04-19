@@ -1,12 +1,12 @@
 import { z } from "zod";
 
 /**
- * Flat JSON metadata object carried inside the username JSON.
+ * Flat JSON object that forms the session affinity key.
  * All values are strings.
  */
-export const sessionMetadataSchema = z.record(z.string(), z.string());
+export const affinityParamsSchema = z.record(z.string(), z.string());
 
-export type SessionMetadata = Record<string, string>;
+export type AffinityParams = Record<string, string>;
 
 export const sessionInfoSchema = z.object({
     /** Internal session ID, assigned at creation (starts at 0, increments per session). */
@@ -141,8 +141,8 @@ export interface HTTPCloakSpec {
 export interface BuildProxyUsernameOptions {
     proxySet: string;
     affinityMinutes: number;
-    metadata: SessionMetadata;
-    /** Enable TLS fingerprint spoofing. Pass a preset name or an HTTPCloakSpec. */
+    affinity: AffinityParams;
+    /** Enable TLS fingerprint spoofing. */
     httpcloak?: HTTPCloakSpec;
 }
 
@@ -153,35 +153,16 @@ export interface BuildProxyUsernameOptions {
  *
  * @example
  * // Without httpcloak
- * buildProxyUsername({ proxySet: "residential", affinityMinutes: 60, metadata: { platform: "ka" } })
+ * buildProxyUsername({ proxySet: "residential", affinityMinutes: 60, affinity: { platform: "ka" } })
  *
- * // With httpcloak preset
- * buildProxyUsername({ proxySet: "direct", affinityMinutes: 0, metadata: {}, httpcloak: "chrome-latest" })
- *
- * // With httpcloak spec
- * buildProxyUsername({ proxySet: "direct", affinityMinutes: 0, metadata: {}, httpcloak: { preset: "chrome-latest", user_agent: "preset" } })
+ * // With httpcloak
+ * buildProxyUsername({ proxySet: "direct", affinityMinutes: 0, affinity: {}, httpcloak: { preset: "chrome-latest", user_agent: "preset" } })
  */
-export function buildProxyUsername(
-    optsOrSet: BuildProxyUsernameOptions | string,
-    affinityMinutes?: number,
-    metadata?: SessionMetadata,
-): string {
-    // Support legacy positional args: buildProxyUsername("set", 60, { ... })
-    let opts: BuildProxyUsernameOptions;
-    if (typeof optsOrSet === "string") {
-        opts = {
-            proxySet: optsOrSet,
-            affinityMinutes: affinityMinutes ?? 0,
-            metadata: metadata ?? {},
-        };
-    } else {
-        opts = optsOrSet;
-    }
-
+export function buildProxyUsername(opts: BuildProxyUsernameOptions): string {
     const payload: Record<string, unknown> = {
         set: opts.proxySet,
         minutes: opts.affinityMinutes,
-        meta: opts.metadata,
+        affinity: opts.affinity,
     };
     if (opts.httpcloak !== undefined) {
         payload.httpcloak = opts.httpcloak;
@@ -197,7 +178,7 @@ export function buildProxyUsername(
 export function parseProxyUsername(username: string): {
     proxySet: string;
     affinityMinutes: number;
-    metadata: SessionMetadata;
+    affinity: AffinityParams;
     httpcloak?: HTTPCloakSpec;
 } | null {
     try {
@@ -205,23 +186,28 @@ export function parseProxyUsername(username: string): {
         const obj = JSON.parse(json);
         if (typeof obj !== "object" || obj === null) return null;
 
-        const { set, minutes, meta, httpcloak } = obj;
-        if (typeof set !== "string" || typeof minutes !== "number" || typeof meta !== "object" || meta === null) {
+        const { set, minutes, affinity, httpcloak } = obj;
+        if (
+            typeof set !== "string" ||
+            typeof minutes !== "number" ||
+            typeof affinity !== "object" ||
+            affinity === null
+        ) {
             return null;
         }
 
-        const metaResult = sessionMetadataSchema.safeParse(meta);
-        if (!metaResult.success) return null;
+        const affinityResult = affinityParamsSchema.safeParse(affinity);
+        if (!affinityResult.success) return null;
 
         const result: {
             proxySet: string;
             affinityMinutes: number;
-            metadata: SessionMetadata;
+            affinity: AffinityParams;
             httpcloak?: HTTPCloakSpec;
         } = {
             proxySet: set,
             affinityMinutes: minutes,
-            metadata: metaResult.data,
+            affinity: affinityResult.data,
         };
         if (httpcloak !== undefined) {
             result.httpcloak = httpcloak;

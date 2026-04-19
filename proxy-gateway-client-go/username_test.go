@@ -10,7 +10,7 @@ func TestBuildAndParseUsername(t *testing.T) {
 	params := proxygatewayclient.UsernameParams{
 		Set:     "residential",
 		Minutes: 60,
-		Meta:    map[string]any{"platform": "myapp", "user": "alice"},
+		Affinity:    map[string]any{"platform": "myapp", "user": "alice"},
 	}
 
 	username, err := proxygatewayclient.BuildUsername(params)

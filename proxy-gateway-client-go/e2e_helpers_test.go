@@ -251,12 +251,12 @@ func upstreamProxyHandler() http.Handler {
 // Client helpers
 // ---------------------------------------------------------------------------
 
-func mustBuildUsername(t *testing.T, set string, minutes int, meta map[string]any) string {
+func mustBuildUsername(t *testing.T, set string, minutes int, affinity map[string]any) string {
 	t.Helper()
 	u, err := proxygatewayclient.BuildUsername(proxygatewayclient.UsernameParams{
-		Set:     set,
-		Minutes: minutes,
-		Meta:    meta,
+		Set:      set,
+		Minutes:  minutes,
+		Affinity: affinity,
 	})
 	if err != nil {
 		t.Fatalf("BuildUsername: %v", err)

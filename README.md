@@ -157,14 +157,14 @@ Direct connections to the target — no upstream proxy. Useful when you only wan
 The `Proxy-Authorization` username is a **JSON object** encoded as base64:
 
 ```json
-{ "set": "residential", "minutes": 60, "meta": { "platform": "myapp", "user": "alice" } }
+{ "set": "residential", "minutes": 60, "affinity": { "platform": "myapp", "user": "alice" } }
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `set` | string | Proxy set name — must match a `[[proxy_set]] name` in config |
 | `minutes` | integer 0–1440 | Affinity duration. `0` = new proxy every request, `1440` = 24 h sticky |
-| `meta` | object | Arbitrary key/value pairs that identify the session (used for affinity key) |
+| `affinity` | object | Arbitrary key/value pairs that identify the session (used for affinity key) |
 | `httpcloak` | object | TLS fingerprint spoofing config (optional, see below) |
 
 The base64-encoded JSON string is the affinity key — identical inputs always map to the same session for the duration of `minutes`.
@@ -177,7 +177,7 @@ When the `httpcloak` field is present, the proxy-gateway activates MITM mode: it
 {
   "set": "direct",
   "minutes": 60,
-  "meta": {},
+  "affinity": {},
   "httpcloak": {
     "preset": "chrome-latest",
     "user_agent": "preset",
@@ -205,15 +205,15 @@ When the `httpcloak` field is present, the proxy-gateway activates MITM mode: it
 
 ```bash
 # Standard proxy (no fingerprint spoofing)
-USERNAME=$(echo -n '{"set":"residential","minutes":60,"meta":{"user":"alice"}}' | base64)
+USERNAME=$(echo -n '{"set":"residential","minutes":60,"affinity":{"user":"alice"}}' | base64)
 curl -x http://127.0.0.1:8100 --proxy-user "$USERNAME:x" https://httpbin.org/ip
 
 # With TLS fingerprint spoofing (Chrome)
-USERNAME=$(echo -n '{"set":"direct","minutes":0,"meta":{},"httpcloak":{"preset":"chrome-latest"}}' | base64)
+USERNAME=$(echo -n '{"set":"direct","minutes":0,"affinity":{},"httpcloak":{"preset":"chrome-latest"}}' | base64)
 curl -x http://127.0.0.1:8100 --proxy-user "$USERNAME:x" -k https://httpbin.org/ip
 
 # SOCKS5
-USERNAME=$(echo -n '{"set":"residential","minutes":60,"meta":{"user":"alice"}}' | base64)
+USERNAME=$(echo -n '{"set":"residential","minutes":60,"affinity":{"user":"alice"}}' | base64)
 curl --socks5 127.0.0.1:1080 --proxy-user "$USERNAME:x" https://httpbin.org/ip
 ```
 
@@ -298,14 +298,14 @@ import { buildProxyUsername } from "@traumwohnung/proxy-gateway-client-ts";
 const username = buildProxyUsername({
   proxySet: "residential",
   affinityMinutes: 60,
-  metadata: { platform: "myapp", user: "alice" },
+  affinity: { platform: "myapp", user: "alice" },
 });
 
 // With TLS fingerprint spoofing
 const spoofedUsername = buildProxyUsername({
   proxySet: "direct",
   affinityMinutes: 0,
-  metadata: {},
+  affinity: {},
   httpcloak: { preset: "chrome-latest", user_agent: "preset" },
 });
 ```
@@ -319,7 +319,7 @@ import proxygatewayclient "github.com/traumwohnung/proxy-gateway/proxy-gateway-c
 username, _ := proxygatewayclient.BuildUsername(proxygatewayclient.UsernameParams{
     Set:     "residential",
     Minutes: 60,
-    Meta:    map[string]any{"user": "alice"},
+    Affinity:    map[string]any{"user": "alice"},
 })
 
 // With TLS fingerprint spoofing

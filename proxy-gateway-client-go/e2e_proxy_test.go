@@ -16,7 +16,7 @@ func TestE2E_BuildAndParseUsername(t *testing.T) {
 	params := proxygatewayclient.UsernameParams{
 		Set:     "residential",
 		Minutes: 60,
-		Meta:    map[string]any{"platform": "myapp", "user": "alice"},
+		Affinity:    map[string]any{"platform": "myapp", "user": "alice"},
 	}
 	u, err := proxygatewayclient.BuildUsername(params)
 	if err != nil {

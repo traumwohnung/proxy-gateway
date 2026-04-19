@@ -13,8 +13,8 @@ type UsernameParams struct {
 	Set string `json:"set"`
 	// Minutes is the affinity duration (0 = new proxy every request, 1–1440 = sticky session).
 	Minutes int `json:"minutes"`
-	// Meta is an arbitrary key/value map that, together with Set, forms the affinity key.
-	Meta map[string]any `json:"meta,omitempty"`
+	// Affinity is an arbitrary key/value map that, together with Set, forms the session affinity key.
+	Affinity map[string]any `json:"affinity,omitempty"`
 	// HTTPCloak enables TLS fingerprint spoofing via MITM. When set, the
 	// proxy-gateway intercepts the TLS connection and re-establishes it with
 	// a browser-like fingerprint.

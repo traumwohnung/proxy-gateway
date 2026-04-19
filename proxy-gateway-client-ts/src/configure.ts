@@ -1,6 +1,6 @@
 import { ProxyGatewayClient } from "./client";
 import { buildProxyUsername } from "./types";
-import type { SessionMetadata } from "./types";
+import type { AffinityParams } from "./types";
 
 let _client: ProxyGatewayClient | null = null;
 
@@ -40,7 +40,7 @@ export function configureProxy(opts: ProxyConfig): void {
 export async function buildAndVerifyProxyUsername(
     proxySet: string,
     affinityMinutes: number,
-    metadata: SessionMetadata,
+    affinity: AffinityParams,
 ): Promise<string> {
     if (!_client) {
         throw new Error(
@@ -48,13 +48,13 @@ export async function buildAndVerifyProxyUsername(
         );
     }
 
-    const username = buildProxyUsername(proxySet, affinityMinutes, metadata);
+    const username = buildProxyUsername({ proxySet, affinityMinutes, affinity });
     const result = await _client.verifyUsername(username);
 
     if (!result.ok) {
         throw new Error(
             `Proxy username verification failed: ${result.error ?? "unknown error"} ` +
-                `(set=${proxySet}, minutes=${affinityMinutes}, metadata=${JSON.stringify(metadata)})`,
+                `(set=${proxySet}, minutes=${affinityMinutes}, affinity=${JSON.stringify(affinity)})`,
         );
     }
 
