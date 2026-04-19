@@ -243,7 +243,10 @@ func TLSFingerprintSpoofing(ca tls.Certificate, preset string, inner proxykit.Ha
 	if err != nil {
 		panic(fmt.Sprintf("tls_fingerprint_spoofing: %v", err))
 	}
-	return proxykit.MITM(certs, &tlsFingerprintInterceptor{spec: &HTTPCloakSpec{Preset: preset}}, inner)
+	return proxykit.MITM(certs, &tlsFingerprintInterceptor{
+		spec:  &HTTPCloakSpec{Preset: preset},
+		cache: newHTTPCloakSessionCache(),
+	}, inner)
 }
 
 // ---------------------------------------------------------------------------
@@ -255,13 +258,24 @@ func TLSFingerprintSpoofing(ca tls.Certificate, preset string, inner proxykit.Ha
 type tlsFingerprintInterceptor struct {
 	spec     *HTTPCloakSpec
 	insecure bool // skip upstream TLS cert verification (for testing only)
+	cache    *httpcloakSessionCache
 }
 
 func (f *tlsFingerprintInterceptor) RoundTrip(ctx context.Context, httpReq *http.Request, host string, proxy *proxykit.Proxy) (*http.Response, error) {
 	proxyURL := proxyToURL(proxy)
-	opts := f.spec.sessionOptions(proxyURL, f.insecure)
 
-	session := httpcloak.NewSession(f.spec.Preset, opts...)
+	// Try to reuse a cached session for this topLevelSeed.
+	var session *httpcloak.Session
+	var ownsSession bool
+	if f.cache != nil {
+		session = f.cache.getOrCreate(ctx, f.spec, proxyURL, f.insecure)
+	}
+	if session == nil {
+		// No affinity or no cache — create a per-request session.
+		opts := f.spec.sessionOptions(proxyURL, f.insecure)
+		session = httpcloak.NewSession(f.spec.Preset, opts...)
+		ownsSession = true
+	}
 
 	// Prefer httpReq.Host for the target URL: it preserves non-standard ports
 	// (e.g. localhost:8443) that the MITM's targetHost() would strip.
@@ -282,7 +296,9 @@ func (f *tlsFingerprintInterceptor) RoundTrip(ctx context.Context, httpReq *http
 
 	// Apply user_agent policy.
 	if err := f.spec.applyUserAgentPolicy(headers); err != nil {
-		session.Close()
+		if ownsSession {
+			session.Close()
+		}
 		return nil, err
 	}
 
@@ -297,8 +313,16 @@ func (f *tlsFingerprintInterceptor) RoundTrip(ctx context.Context, httpReq *http
 
 	resp, err := session.Do(ctx, cloakReq)
 	if err != nil {
-		session.Close()
+		if ownsSession {
+			session.Close()
+		}
 		return nil, fmt.Errorf("httpcloak %s: %w", targetURL, err)
+	}
+
+	var body io.ReadCloser = resp.Body
+	if ownsSession {
+		// Per-request session: close it when the body is consumed.
+		body = &sessionClosingBody{ReadCloser: resp.Body, session: session}
 	}
 
 	httpResp := &http.Response{
@@ -308,7 +332,7 @@ func (f *tlsFingerprintInterceptor) RoundTrip(ctx context.Context, httpReq *http
 		ProtoMajor:    1,
 		ProtoMinor:    1,
 		Header:        make(http.Header),
-		Body:          &sessionClosingBody{ReadCloser: resp.Body, session: session},
+		Body:          body,
 		ContentLength: -1,
 	}
 	for k, vs := range resp.Headers {
@@ -487,11 +511,13 @@ func ConditionalFingerprintMITM(ca tls.Certificate, getSpec func(context.Context
 		panic(fmt.Sprintf("ConditionalFingerprintMITM: %v", err))
 	}
 	insecure := os.Getenv("PROXY_MITM_INSECURE_UPSTREAM") == "true"
+	cache := newHTTPCloakSessionCache()
 	return &conditionalMITMHandler{
 		certs:    certs,
 		getSpec:  getSpec,
 		inner:    inner,
 		insecure: insecure,
+		cache:    cache,
 	}
 }
 
@@ -500,6 +526,7 @@ type conditionalMITMHandler struct {
 	getSpec  func(context.Context) *HTTPCloakSpec
 	inner    proxykit.Handler
 	insecure bool
+	cache    *httpcloakSessionCache
 }
 
 func (h *conditionalMITMHandler) Resolve(ctx context.Context, req *proxykit.Request) (*proxykit.Result, error) {
@@ -507,7 +534,7 @@ func (h *conditionalMITMHandler) Resolve(ctx context.Context, req *proxykit.Requ
 	if spec.IsZero() {
 		return h.inner.Resolve(ctx, req)
 	}
-	interceptor := &tlsFingerprintInterceptor{spec: spec, insecure: h.insecure}
+	interceptor := &tlsFingerprintInterceptor{spec: spec, insecure: h.insecure, cache: h.cache}
 	mitmHandler := proxykit.MITM(h.certs, interceptor, h.inner)
 	return mitmHandler.Resolve(ctx, req)
 }
