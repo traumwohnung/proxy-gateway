@@ -109,8 +109,38 @@ export const usageResponseSchema = z.object({
 export type UsageResponse = z.infer<typeof usageResponseSchema>;
 
 // ---------------------------------------------------------------------------
+// HTTPCloak types
+// ---------------------------------------------------------------------------
+
+/**
+ * Configures TLS fingerprint spoofing via MITM.
+ * For simple cases, pass a preset name string (e.g. "chrome-latest") instead.
+ */
+export interface HTTPCloakSpec {
+    /** Browser fingerprint preset (e.g. "chrome-latest", "firefox-latest"). */
+    preset: string;
+    /** User-Agent handling: "ignore" (default), "preset", or "check". */
+    user_agent?: "ignore" | "preset" | "check";
+    /** Override the preset's TLS fingerprint (advanced). */
+    ja3?: string;
+    /** Override the preset's HTTP/2 fingerprint (advanced). */
+    akamai?: string;
+}
+
+/** HTTPCloak option: either a preset name string or a full spec object. */
+export type HTTPCloakOption = string | HTTPCloakSpec;
+
+// ---------------------------------------------------------------------------
 // Username construction helpers
 // ---------------------------------------------------------------------------
+
+export interface BuildProxyUsernameOptions {
+    proxySet: string;
+    affinityMinutes: number;
+    metadata: SessionMetadata;
+    /** Enable TLS fingerprint spoofing. Pass a preset name or an HTTPCloakSpec. */
+    httpcloak?: HTTPCloakOption;
+}
 
 /**
  * Build the proxy-gateway username — a base64-encoded JSON object.
@@ -118,10 +148,41 @@ export type UsageResponse = z.infer<typeof usageResponseSchema>;
  * to also verify that the proxy set exists and the upstream is reachable.
  *
  * @example
- * buildProxyUsername("residential", 60, { platform: "ka", user: "alice" })
+ * // Without httpcloak
+ * buildProxyUsername({ proxySet: "residential", affinityMinutes: 60, metadata: { platform: "ka" } })
+ *
+ * // With httpcloak preset
+ * buildProxyUsername({ proxySet: "direct", affinityMinutes: 0, metadata: {}, httpcloak: "chrome-latest" })
+ *
+ * // With httpcloak spec
+ * buildProxyUsername({ proxySet: "direct", affinityMinutes: 0, metadata: {}, httpcloak: { preset: "chrome-latest", user_agent: "preset" } })
  */
-export function buildProxyUsername(proxySet: string, affinityMinutes: number, metadata: SessionMetadata): string {
-    const json = JSON.stringify({ meta: metadata, minutes: affinityMinutes, set: proxySet });
+export function buildProxyUsername(
+    optsOrSet: BuildProxyUsernameOptions | string,
+    affinityMinutes?: number,
+    metadata?: SessionMetadata,
+): string {
+    // Support legacy positional args: buildProxyUsername("set", 60, { ... })
+    let opts: BuildProxyUsernameOptions;
+    if (typeof optsOrSet === "string") {
+        opts = {
+            proxySet: optsOrSet,
+            affinityMinutes: affinityMinutes ?? 0,
+            metadata: metadata ?? {},
+        };
+    } else {
+        opts = optsOrSet;
+    }
+
+    const payload: Record<string, unknown> = {
+        set: opts.proxySet,
+        minutes: opts.affinityMinutes,
+        meta: opts.metadata,
+    };
+    if (opts.httpcloak !== undefined) {
+        payload.httpcloak = opts.httpcloak;
+    }
+    const json = JSON.stringify(payload);
     return btoa(json);
 }
 
@@ -133,13 +194,14 @@ export function parseProxyUsername(username: string): {
     proxySet: string;
     affinityMinutes: number;
     metadata: SessionMetadata;
+    httpcloak?: HTTPCloakOption;
 } | null {
     try {
         const json = atob(username);
         const obj = JSON.parse(json);
         if (typeof obj !== "object" || obj === null) return null;
 
-        const { set, minutes, meta } = obj;
+        const { set, minutes, meta, httpcloak } = obj;
         if (typeof set !== "string" || typeof minutes !== "number" || typeof meta !== "object" || meta === null) {
             return null;
         }
@@ -147,11 +209,20 @@ export function parseProxyUsername(username: string): {
         const metaResult = sessionMetadataSchema.safeParse(meta);
         if (!metaResult.success) return null;
 
-        return {
+        const result: {
+            proxySet: string;
+            affinityMinutes: number;
+            metadata: SessionMetadata;
+            httpcloak?: HTTPCloakOption;
+        } = {
             proxySet: set,
             affinityMinutes: minutes,
             metadata: metaResult.data,
         };
+        if (httpcloak !== undefined) {
+            result.httpcloak = httpcloak;
+        }
+        return result;
     } catch {
         return null;
     }

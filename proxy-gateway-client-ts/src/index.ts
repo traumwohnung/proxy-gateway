@@ -2,6 +2,9 @@ export { ProxyGatewayClient, type ProxyGatewayClientOptions } from "./client";
 // Types
 export type {
     ApiError,
+    BuildProxyUsernameOptions,
+    HTTPCloakOption,
+    HTTPCloakSpec,
     SessionInfo,
     SessionMetadata,
     UsageFilter,
