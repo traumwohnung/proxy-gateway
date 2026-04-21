@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
@@ -239,13 +240,18 @@ func userAgentMatchesPreset(clientUA, presetUA string) bool {
 //
 // Preset examples: "chrome-latest", "firefox-latest", "safari-latest"
 func TLSFingerprintSpoofing(ca tls.Certificate, preset string, inner proxykit.Handler) proxykit.Handler {
+	return TLSFingerprintSpoofingWithOptions(ca, preset, false, inner)
+}
+
+func TLSFingerprintSpoofingWithOptions(ca tls.Certificate, preset string, insecure bool, inner proxykit.Handler) proxykit.Handler {
 	certs, err := proxykit.NewForgedCertProvider(ca)
 	if err != nil {
 		panic(fmt.Sprintf("tls_fingerprint_spoofing: %v", err))
 	}
 	return proxykit.MITM(certs, &tlsFingerprintInterceptor{
-		spec:  &HTTPCloakSpec{Preset: preset},
-		cache: newHTTPCloakSessionCache(),
+		spec:     &HTTPCloakSpec{Preset: preset},
+		insecure: insecure,
+		cache:    newHTTPCloakSessionCache(),
 	}, inner)
 }
 
@@ -264,21 +270,22 @@ type tlsFingerprintInterceptor struct {
 func (f *tlsFingerprintInterceptor) RoundTrip(ctx context.Context, httpReq *http.Request, host string, proxy *proxykit.Proxy) (*http.Response, error) {
 	proxyURL := proxyToURL(proxy)
 
-	// Try to reuse a cached session for this topLevelSeed.
+	// Reuse cached sessions for the same affinity seed — avoids creating a
+	// new TLS connection through the upstream proxy for every request, which
+	// triggers rate limiting. Session stays alive because resp.Bytes() uses
+	// CloseBody() (not Close()) to consume the body without canceling the
+	// session context.
 	var session *httpcloak.Session
 	var ownsSession bool
 	if f.cache != nil {
 		session = f.cache.getOrCreate(ctx, f.spec, proxyURL, f.insecure)
 	}
 	if session == nil {
-		// No affinity or no cache — create a per-request session.
 		opts := f.spec.sessionOptions(proxyURL, f.insecure)
 		session = httpcloak.NewSession(f.spec.Preset, opts...)
 		ownsSession = true
 	}
 
-	// Prefer httpReq.Host for the target URL: it preserves non-standard ports
-	// (e.g. localhost:8443) that the MITM's targetHost() would strip.
 	urlHost := httpReq.Host
 	if urlHost == "" {
 		urlHost = host
@@ -294,11 +301,7 @@ func (f *tlsFingerprintInterceptor) RoundTrip(ctx context.Context, httpReq *http
 		headers[k] = vs
 	}
 
-	// Apply user_agent policy.
 	if err := f.spec.applyUserAgentPolicy(headers); err != nil {
-		if ownsSession {
-			session.Close()
-		}
 		return nil, err
 	}
 
@@ -319,10 +322,21 @@ func (f *tlsFingerprintInterceptor) RoundTrip(ctx context.Context, httpReq *http
 		return nil, fmt.Errorf("httpcloak %s: %w", targetURL, err)
 	}
 
-	var body io.ReadCloser = resp.Body
+	// Buffer the entire body via resp.Bytes() — httpcloak handles
+	// decompression internally. This gives us a proper EOF, correct
+	// ContentLength, and avoids streaming issues with httpcloak's body.
+	data, err := resp.Bytes()
+	if err != nil {
+		if ownsSession {
+			session.Close()
+		}
+		return nil, fmt.Errorf("reading httpcloak body for %s: %w", targetURL, err)
+	}
+	// For per-request sessions, close now. For cached sessions, the session
+	// stays alive — resp.Bytes() used CloseBody() which frees the stream
+	// without canceling the session context.
 	if ownsSession {
-		// Per-request session: close it when the body is consumed.
-		body = &sessionClosingBody{ReadCloser: resp.Body, session: session}
+		session.Close()
 	}
 
 	httpResp := &http.Response{
@@ -332,38 +346,26 @@ func (f *tlsFingerprintInterceptor) RoundTrip(ctx context.Context, httpReq *http
 		ProtoMajor:    1,
 		ProtoMinor:    1,
 		Header:        make(http.Header),
-		Body:          body,
-		ContentLength: -1,
+		Body:          io.NopCloser(bytes.NewReader(data)),
+		ContentLength: int64(len(data)),
 	}
 	for k, vs := range resp.Headers {
 		for _, v := range vs {
 			httpResp.Header.Add(k, v)
 		}
 	}
-	// Preserve upstream Content-Length when present so the MITM loop can
-	// keep the client connection alive across HTTP/1.1 keep-alive requests.
-	if cl := httpResp.Header.Get("Content-Length"); cl != "" {
-		fmt.Sscanf(cl, "%d", &httpResp.ContentLength)
-	}
-	// Remove Transfer-Encoding — Go's resp.Write will set it based on ContentLength.
+	// Strip stale headers — httpcloak already decompressed the body.
+	httpResp.Header.Del("Content-Encoding")
+	httpResp.Header.Del("Content-Length")
 	httpResp.Header.Del("Transfer-Encoding")
 	return httpResp, nil
 }
 
-// sessionClosingBody wraps the httpcloak response body and closes the
-// httpcloak session when the body is closed. This ties the session lifetime
-// to the body consumption, enabling streaming without buffering.
-type sessionClosingBody struct {
-	io.ReadCloser
-	session *httpcloak.Session
-}
-
-func (b *sessionClosingBody) Close() error {
-	err := b.ReadCloser.Close()
-	b.session.Close()
-	return err
-}
-
+// closeHTTPCloakBody closes just the underlying HTTP response body of an
+// httpcloak StreamResponse, without canceling the session context. This frees
+// the H2 stream / H1 connection for reuse while keeping the session alive.
+//
+// httpcloak's StreamResponse.Close() always calls cancel() which poisons the
 // DialTLS implements proxykit.WebSocketDialer. It dials the target with a
 // browser-like TLS fingerprint using utls, optionally through an upstream proxy.
 // target is "host:port".

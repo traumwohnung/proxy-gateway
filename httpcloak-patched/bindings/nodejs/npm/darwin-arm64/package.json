@@ -1,0 +1,27 @@
+{
+  "name": "@httpcloak/darwin-arm64",
+  "version": "1.6.1",
+  "description": "HTTPCloak native binary for darwin arm64",
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "main": "lib.js",
+  "module": "lib.mjs",
+  "exports": {
+    ".": {
+      "import": "./lib.mjs",
+      "require": "./lib.js"
+    }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sardanioss/httpcloak"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

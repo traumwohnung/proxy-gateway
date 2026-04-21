@@ -1,0 +1,27 @@
+{
+  "name": "@httpcloak/win32-x64",
+  "version": "1.6.1",
+  "description": "HTTPCloak native binary for win32 x64",
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "main": "lib.js",
+  "module": "lib.mjs",
+  "exports": {
+    ".": {
+      "import": "./lib.mjs",
+      "require": "./lib.js"
+    }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sardanioss/httpcloak"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
