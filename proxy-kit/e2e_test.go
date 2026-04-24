@@ -2095,3 +2095,162 @@ func TestE2E_MITM_HTTPCloakKeepAliveWithUpstreamProxy(t *testing.T) {
 	}
 	t.Logf("All %d requests succeeded via httpcloak MITM with upstream proxy", len(requests))
 }
+
+// TestE2E_MITM_NoCookieJar proves the proxy does NOT persist cookies across
+// tunnels. Pre-A (httpcloak.Session with jar + ClearCookies workaround),
+// Set-Cookie responses from tunnel N bled into outbound Cookie headers on
+// tunnel N+1 for the same affinity, making stateful upstreams like
+// identity providers short-circuit subsequent auth attempts past the login
+// form.
+//
+// Post-A the proxy uses transport.Transport (no jar) so the property is
+// structural — cookies cannot be injected by the proxy layer at all.
+func TestE2E_MITM_NoCookieJar(t *testing.T) {
+	ca, err := proxykit.NewCA()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fp, _ := proxykit.NewForgedCertProvider(ca)
+	cert, _ := fp.CertForHost("127.0.0.1")
+	ln, _ := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		Certificates: []tls.Certificate{*cert},
+	})
+
+	// Target: first request sets a cookie; every request echoes back the
+	// Cookie header it received (empty string if none).
+	var reqNum int32
+	srv := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			n := atomic.AddInt32(&reqNum, 1)
+			if n == 1 {
+				// Simulate auth that sets an SSO-style cookie.
+				w.Header().Set("Set-Cookie", "sid=s3cr3t; Path=/; HttpOnly")
+			}
+			fmt.Fprintf(w, "seen-cookie:%q", r.Header.Get("Cookie"))
+		}),
+	}
+	go srv.Serve(ln)
+	defer srv.Close()
+	tlsPort := mustPort(t, ln.Addr().String())
+
+	inner := staticSource(&proxykit.Proxy{})
+	pipeline := utils.TLSFingerprintSpoofingWithOptions(ca, "chrome-146", true, inner)
+	proxyAddr, closeProxy := startHTTPProxy(t, pipeline, directUpstream)
+	defer closeProxy()
+
+	caPool, _ := caX509Pool(ca)
+	proxyURL := &url.URL{Scheme: "http", Host: proxyAddr, User: url.UserPassword("", "")}
+
+	// Two independent clients — simulates two separate MITM tunnels. Each
+	// client opens its own TCP to proxy-gateway, so each triggers a distinct
+	// TunnelScope. Client A makes the auth request that sets the cookie.
+	// Client B must NOT see that cookie in its outbound Cookie header.
+	newClient := func() *http.Client {
+		return &http.Client{
+			Transport: &http.Transport{
+				Proxy:           http.ProxyURL(proxyURL),
+				TLSClientConfig: &tls.Config{RootCAs: caPool},
+			},
+			Timeout: 15 * time.Second,
+		}
+	}
+
+	// Client A: triggers Set-Cookie response. Client does not forward the
+	// cookie on subsequent requests since it has no jar itself.
+	respA, err := newClient().Get(fmt.Sprintf("https://127.0.0.1:%d/auth", tlsPort))
+	if err != nil {
+		t.Fatalf("client A request: %v", err)
+	}
+	bodyA, _ := io.ReadAll(respA.Body)
+	respA.Body.Close()
+	if got, want := string(bodyA), `seen-cookie:""`; got != want {
+		t.Fatalf("client A saw cookie on outbound (should be empty): got=%s want=%s", got, want)
+	}
+	if respA.Header.Get("Set-Cookie") == "" {
+		t.Fatalf("client A did not receive Set-Cookie from upstream")
+	}
+
+	// Client B: fresh tunnel, no cookies of its own. If the proxy had a
+	// cookie jar, it would inject sid=s3cr3t here. With Transport (no jar),
+	// the outbound Cookie header is empty — proving transparency.
+	respB, err := newClient().Get(fmt.Sprintf("https://127.0.0.1:%d/protected", tlsPort))
+	if err != nil {
+		t.Fatalf("client B request: %v", err)
+	}
+	bodyB, _ := io.ReadAll(respB.Body)
+	respB.Body.Close()
+	if got, want := string(bodyB), `seen-cookie:""`; got != want {
+		t.Fatalf("client B saw bled cookie on outbound (expected empty): got=%s want=%s", got, want)
+	}
+}
+
+// TestE2E_MITM_NoRedirectFollow proves the proxy passes 3xx responses back
+// to the MITM caller without following them. Pre-A (httpcloak.Session
+// with FollowRedirects=true by default, plus WithoutRedirects workaround),
+// a custom-scheme Location (e.g. mobile deep-link callback) was mangled by
+// httpcloak's URL parser into a malformed CONNECT target that the upstream
+// proxy rejected with 500.
+//
+// Post-A there is no redirect-follower layer at all — transport.Transport
+// is protocol-neutral and returns 3xx as-is.
+func TestE2E_MITM_NoRedirectFollow(t *testing.T) {
+	ca, err := proxykit.NewCA()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fp, _ := proxykit.NewForgedCertProvider(ca)
+	cert, _ := fp.CertForHost("127.0.0.1")
+	ln, _ := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		Certificates: []tls.Certificate{*cert},
+	})
+
+	// Target returns a 302 to a custom URL scheme (a mobile deep-link
+	// callback). If the proxy tries to follow, it will attempt a CONNECT
+	// to an invalid target and fail. Correct behavior: hand the 302 back
+	// to the client unchanged.
+	srv := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Location", "appscheme:/callback?code=abc123")
+			w.WriteHeader(http.StatusFound)
+		}),
+	}
+	go srv.Serve(ln)
+	defer srv.Close()
+	tlsPort := mustPort(t, ln.Addr().String())
+
+	inner := staticSource(&proxykit.Proxy{})
+	pipeline := utils.TLSFingerprintSpoofingWithOptions(ca, "chrome-146", true, inner)
+	proxyAddr, closeProxy := startHTTPProxy(t, pipeline, directUpstream)
+	defer closeProxy()
+
+	caPool, _ := caX509Pool(ca)
+	proxyURL := &url.URL{Scheme: "http", Host: proxyAddr, User: url.UserPassword("", "")}
+
+	// Client with CheckRedirect disabled — we want to observe the 302
+	// directly, not have the Go http.Client follow it.
+	client := &http.Client{
+		Transport: &http.Transport{
+			Proxy:           http.ProxyURL(proxyURL),
+			TLSClientConfig: &tls.Config{RootCAs: caPool},
+		},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+		Timeout: 15 * time.Second,
+	}
+
+	resp, err := client.Get(fmt.Sprintf("https://127.0.0.1:%d/login/callback", tlsPort))
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want 302 — proxy followed the redirect", resp.StatusCode)
+	}
+	if got, want := resp.Header.Get("Location"), "appscheme:/callback?code=abc123"; got != want {
+		t.Fatalf("Location = %q, want %q — proxy rewrote the Location header", got, want)
+	}
+}

@@ -142,24 +142,15 @@ func (s *HTTPCloakSpec) IsZero() bool {
 	return s == nil || s.Preset == ""
 }
 
-// sessionOptions builds the httpcloak.SessionOption slice for this spec.
-func (s *HTTPCloakSpec) sessionOptions(proxyURL string, insecure bool) []httpcloak.SessionOption {
+// transportOptions builds the httpcloak.SessionOption slice for this spec,
+// scoped to transport-level concerns only. Used with httpcloak.NewTransport
+// — session-level behaviors (cookie jar, redirect follower, retry loop) are
+// never applied, so the `WithoutRedirects` / `WithoutRetry` / `ClearCookies`
+// workarounds that used to be necessary against httpcloak.Session are gone.
+// The proxy is transparent for cookies and redirects by construction.
+func (s *HTTPCloakSpec) transportOptions(proxyURL string, insecure bool) []httpcloak.SessionOption {
 	opts := []httpcloak.SessionOption{
 		httpcloak.WithSessionTimeout(30 * time.Second),
-		// Return redirect responses as-is to the MITM caller. Following
-		// redirects inside the proxy is wrong for two reasons:
-		//   1. Apps commonly redirect to non-HTTP schemes for deep links
-		//      (custom URL schemes like "appscheme:/callback?code=..." for
-		//      mobile deep-linking). httpcloak's URL parser mangles those
-		//      into ":80" CONNECT targets that the upstream residential
-		//      proxy correctly rejects as 500s.
-		//   2. The caller (browser, mobile app, scraper) has its own redirect
-		//      policy. Silently following in the proxy bypasses it and can
-		//      leak cookies, expose intermediate URLs, or consume auth codes
-		//      the caller wanted to inspect.
-		// Go's http.Client uses `http.ErrUseLastResponse` for the same
-		// purpose.
-		httpcloak.WithoutRedirects(),
 	}
 	if proxyURL != "" {
 		opts = append(opts, httpcloak.WithSessionProxy(proxyURL))
@@ -266,7 +257,6 @@ func TLSFingerprintSpoofingWithOptions(ca tls.Certificate, preset string, insecu
 	return proxykit.MITM(certs, &tlsFingerprintInterceptor{
 		spec:     &HTTPCloakSpec{Preset: preset},
 		insecure: insecure,
-		cache:    newHTTPCloakSessionCache(),
 	}, inner)
 }
 
@@ -279,7 +269,6 @@ func TLSFingerprintSpoofingWithOptions(ca tls.Certificate, preset string, insecu
 type tlsFingerprintInterceptor struct {
 	spec     *HTTPCloakSpec
 	insecure bool // skip upstream TLS cert verification (for testing only)
-	cache    *httpcloakSessionCache
 }
 
 // RoundTrip forwards a single decrypted request through the httpcloak session.
@@ -302,11 +291,11 @@ type tlsFingerprintInterceptor struct {
 // Content-Length (http.NewRequestWithContext has a switch on *bytes.Reader)
 // instead of falling back to chunked transfer-encoding, which some upstream
 // APIs reject as malformed.
-// tunnelSessionKey uniquely identifies a session within a tunnel scope. Two
-// requests on the same tunnel with the same preset + upstream proxy share the
-// session; a different preset or different upstream proxy gets a separate
-// session within the same tunnel.
-type tunnelSessionKey struct {
+// tunnelTransportKey uniquely identifies a Transport instance within a tunnel
+// scope. Two requests on the same tunnel with the same preset + upstream
+// proxy share the Transport; a different preset or different upstream proxy
+// gets a separate Transport within the same tunnel.
+type tunnelTransportKey struct {
 	preset   string
 	proxyURL string
 	insecure bool
@@ -317,59 +306,46 @@ func (f *tlsFingerprintInterceptor) RoundTrip(ctx context.Context, httpReq *http
 	start := time.Now()
 	seed := GetTopLevelSeed(ctx)
 
-	// Prefer a tunnel-scoped session when available (normal MITM path). The
-	// session lives exactly as long as the client TLS tunnel, so cookies and
-	// connection pools cannot leak into a subsequent tunnel that shares the
-	// same affinity seed. Falls back to the old seed-keyed cross-tunnel cache
-	// only when called outside a TunnelScope (tests, direct use).
-	var session *httpcloak.Session
-	var ownsSession bool
-	sessionSource := "fresh"
+	// Prefer a tunnel-scoped Transport when available (normal MITM path). The
+	// Transport lives exactly as long as the client TLS tunnel, so its pool
+	// cannot leak across tunnels. No cookie jar, no redirect follower, no
+	// session-level retry — those client behaviors are gone by construction.
+	var tr *httpcloaktransport.Transport
+	var ownsTransport bool
+	transportSource := "fresh"
 	if scope := proxykit.GetTunnelScope(ctx); scope != nil {
-		key := tunnelSessionKey{preset: f.spec.Preset, proxyURL: proxyURL, insecure: f.insecure}
+		key := tunnelTransportKey{preset: f.spec.Preset, proxyURL: proxyURL, insecure: f.insecure}
 		v := scope.GetOrSet(key, func() (any, func()) {
-			opts := f.spec.sessionOptions(proxyURL, f.insecure)
-			s := httpcloak.NewSession(f.spec.Preset, opts...)
-			return s, s.Close
+			opts := f.spec.transportOptions(proxyURL, f.insecure)
+			t, terr := httpcloak.NewTransport(f.spec.Preset, opts...)
+			if terr != nil {
+				slog.Error("mitm.request failed to build transport",
+					"err", terr, "preset", f.spec.Preset)
+				return nil, func() {}
+			}
+			return t, t.Close
 		})
-		session = v.(*httpcloak.Session)
-		sessionSource = "tunnel-scoped"
-	} else if f.cache != nil {
-		session = f.cache.getOrCreate(ctx, f.spec, proxyURL, f.insecure)
-		if session != nil {
-			sessionSource = "cached"
+		if v != nil {
+			tr = v.(*httpcloaktransport.Transport)
+			transportSource = "tunnel-scoped"
 		}
 	}
-	if session == nil {
-		opts := f.spec.sessionOptions(proxyURL, f.insecure)
-		session = httpcloak.NewSession(f.spec.Preset, opts...)
-		ownsSession = true
+	if tr == nil {
+		opts := f.spec.transportOptions(proxyURL, f.insecure)
+		t, terr := httpcloak.NewTransport(f.spec.Preset, opts...)
+		if terr != nil {
+			return nil, fmt.Errorf("building transport: %w", terr)
+		}
+		tr = t
+		ownsTransport = true
 	}
-
-	// Cookie-transparency: forward only the cookies the client sent; do not
-	// let httpcloak inject state it accumulated from previous requests.
-	//
-	// httpcloak's Session is designed as an HTTP client with its own cookie
-	// jar. When a session is reused across flows (for TLS connection reuse,
-	// sticky-session affinity, etc.) the jar persists session/SSO cookies
-	// set by a successful authentication — and on the next flow, injects
-	// those into subsequent auth endpoints, making the target server
-	// short-circuit past the login form because the user appears already
-	// authenticated. Downstream clients then get a response they don't
-	// expect.
-	//
-	// Clearing before each request makes the jar a no-op on the outbound
-	// path. The inbound path still copies every Set-Cookie response header
-	// back to the MITM client, so the real cookie state lives with the
-	// client — which is the correct place for it in a forwarding proxy.
-	session.ClearCookies()
 
 	slog.Debug("mitm.request.begin",
 		"host", host,
 		"method", httpReq.Method,
 		"path", httpReq.URL.RequestURI(),
 		"seed", seed,
-		"session", sessionSource,
+		"transport", transportSource,
 		"upstream_proxy", redactProxyURL(proxyURL),
 		"preset", f.spec.Preset)
 
@@ -383,8 +359,8 @@ func (f *tlsFingerprintInterceptor) RoundTrip(ctx context.Context, httpReq *http
 			slog.Warn("MITM request body buffering failed",
 				"host", host, "method", httpReq.Method, "path", httpReq.URL.RequestURI(),
 				"err", readErr)
-			if ownsSession {
-				session.Close()
+			if ownsTransport {
+				tr.Close()
 			}
 			return nil, fmt.Errorf("buffering request body: %w", readErr)
 		}
@@ -396,7 +372,7 @@ func (f *tlsFingerprintInterceptor) RoundTrip(ctx context.Context, httpReq *http
 		}
 	}
 
-	resp, err := f.doRoundTrip(ctx, session, httpReq, reqBody, host, proxyURL)
+	resp, err := f.doRoundTrip(ctx, tr, httpReq, reqBody, host, proxyURL)
 	elapsed := time.Since(start)
 
 	// Unified request event. Every MITM request produces exactly one of
@@ -406,7 +382,7 @@ func (f *tlsFingerprintInterceptor) RoundTrip(ctx context.Context, httpReq *http
 		Host:       host,
 		Seed:       seed,
 		Preset:     f.spec.Preset,
-		SessionSrc: sessionSource,
+		SessionSrc: transportSource,
 		Method:     httpReq.Method,
 		Path:       httpReq.URL.RequestURI(),
 		BodyLen:    bodyLen,
@@ -420,23 +396,20 @@ func (f *tlsFingerprintInterceptor) RoundTrip(ctx context.Context, httpReq *http
 	if err != nil {
 		event.Err = err
 		event.ErrKind = ClassifyError(err)
-		switch sessionSource {
-		case "fresh":
-			session.Close()
-		case "cached":
-			if seed != 0 && f.cache != nil {
-				f.cache.evict(seed)
-			}
-		case "tunnel-scoped":
-			// Tunnel owns session lifecycle; leave in place.
+		if ownsTransport {
+			tr.Close()
 		}
+		// Tunnel-scoped transports are owned by the tunnel lifecycle; do
+		// not evict on a single request error. If the upstream is truly
+		// dead the next request fails the same way and the caller tears
+		// the tunnel down.
 		slog.Warn("mitm.request",
 			"host", event.Host,
 			"method", event.Method,
 			"path", event.Path,
 			"seed", event.Seed,
 			"preset", event.Preset,
-			"session", event.SessionSrc,
+			"transport", event.SessionSrc,
 			"body_len", event.BodyLen,
 			"status", event.Status,
 			"elapsed_ms", event.Elapsed.Milliseconds(),
@@ -452,14 +425,14 @@ func (f *tlsFingerprintInterceptor) RoundTrip(ctx context.Context, httpReq *http
 		"path", event.Path,
 		"seed", event.Seed,
 		"preset", event.Preset,
-		"session", event.SessionSrc,
+		"transport", event.SessionSrc,
 		"body_len", event.BodyLen,
 		"status", event.Status,
 		"content_length", event.ContentLen,
 		"elapsed_ms", event.Elapsed.Milliseconds())
 
-	if ownsSession {
-		session.Close()
+	if ownsTransport {
+		tr.Close()
 	}
 	return resp, nil
 }
@@ -484,7 +457,7 @@ func redactProxyURL(u string) string {
 	return u[:i+3] + authPart[:colon] + ":<redacted>" + u[i+3+j:]
 }
 
-func (f *tlsFingerprintInterceptor) doRoundTrip(ctx context.Context, session *httpcloak.Session, httpReq *http.Request, reqBody io.Reader, host, proxyURL string) (*http.Response, error) {
+func (f *tlsFingerprintInterceptor) doRoundTrip(ctx context.Context, tr *httpcloaktransport.Transport, httpReq *http.Request, reqBody io.Reader, host, proxyURL string) (*http.Response, error) {
 	urlHost := httpReq.Host
 	if urlHost == "" {
 		urlHost = host
@@ -504,41 +477,46 @@ func (f *tlsFingerprintInterceptor) doRoundTrip(ctx context.Context, session *ht
 		return nil, err
 	}
 
-	cloakReq := &httpcloak.Request{
-		Method:  httpReq.Method,
-		URL:     targetURL,
-		Headers: headers,
-		Body:    reqBody,
+	treq := &httpcloaktransport.Request{
+		Method:     httpReq.Method,
+		URL:        targetURL,
+		Headers:    headers,
+		BodyReader: reqBody,
 	}
 
-	slog.Debug("httpcloak session.Do begin",
+	slog.Debug("transport.Do begin",
 		"target", targetURL, "method", httpReq.Method,
 		"header_count", len(headers), "has_body", reqBody != nil)
 	doStart := time.Now()
 
-	resp, err := session.Do(ctx, cloakReq)
+	resp, err := tr.Do(ctx, treq)
 	if err != nil {
-		slog.Debug("httpcloak session.Do failed",
+		slog.Debug("transport.Do failed",
 			"target", targetURL, "method", httpReq.Method,
 			"elapsed_ms", time.Since(doStart).Milliseconds(),
 			"err", err)
 		return nil, fmt.Errorf("httpcloak %s: %w", targetURL, err)
 	}
-	slog.Debug("httpcloak session.Do returned",
+	slog.Debug("transport.Do returned",
 		"target", targetURL, "method", httpReq.Method,
 		"status", resp.StatusCode, "protocol", resp.Protocol,
 		"elapsed_ms", time.Since(doStart).Milliseconds())
 
+	// transport.Response.Bytes() reads the body fully, closes it, and caches.
+	// Transport already decompresses per Content-Encoding and hands us the
+	// decoded bytes, so Content-Encoding/Content-Length/Transfer-Encoding
+	// response headers are stale and must be stripped before we hand the
+	// response to the MITM client (which will re-frame based on our buffer).
 	bodyStart := time.Now()
 	data, err := resp.Bytes()
 	if err != nil {
-		slog.Debug("httpcloak body read failed",
+		slog.Debug("transport body read failed",
 			"target", targetURL, "status", resp.StatusCode,
 			"elapsed_ms", time.Since(bodyStart).Milliseconds(),
 			"err", err)
-		return nil, fmt.Errorf("reading httpcloak body for %s: %w", targetURL, err)
+		return nil, fmt.Errorf("reading transport body for %s: %w", targetURL, err)
 	}
-	slog.Debug("httpcloak body read complete",
+	slog.Debug("transport body read complete",
 		"target", targetURL, "bytes", len(data),
 		"elapsed_ms", time.Since(bodyStart).Milliseconds())
 
@@ -715,13 +693,11 @@ func ConditionalFingerprintMITM(ca tls.Certificate, getSpec func(context.Context
 		panic(fmt.Sprintf("ConditionalFingerprintMITM: %v", err))
 	}
 	insecure := os.Getenv("PROXY_MITM_INSECURE_UPSTREAM") == "true"
-	cache := newHTTPCloakSessionCache()
 	return &conditionalMITMHandler{
 		certs:    certs,
 		getSpec:  getSpec,
 		inner:    inner,
 		insecure: insecure,
-		cache:    cache,
 	}
 }
 
@@ -730,7 +706,6 @@ type conditionalMITMHandler struct {
 	getSpec  func(context.Context) *HTTPCloakSpec
 	inner    proxykit.Handler
 	insecure bool
-	cache    *httpcloakSessionCache
 }
 
 func (h *conditionalMITMHandler) Resolve(ctx context.Context, req *proxykit.Request) (*proxykit.Result, error) {
@@ -738,7 +713,7 @@ func (h *conditionalMITMHandler) Resolve(ctx context.Context, req *proxykit.Requ
 	if spec.IsZero() {
 		return h.inner.Resolve(ctx, req)
 	}
-	interceptor := &tlsFingerprintInterceptor{spec: spec, insecure: h.insecure, cache: h.cache}
+	interceptor := &tlsFingerprintInterceptor{spec: spec, insecure: h.insecure}
 	mitmHandler := proxykit.MITM(h.certs, interceptor, h.inner)
 	return mitmHandler.Resolve(ctx, req)
 }
