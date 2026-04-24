@@ -291,53 +291,33 @@ type tlsFingerprintInterceptor struct {
 // Content-Length (http.NewRequestWithContext has a switch on *bytes.Reader)
 // instead of falling back to chunked transfer-encoding, which some upstream
 // APIs reject as malformed.
-// tunnelTransportKey uniquely identifies a Transport instance within a tunnel
-// scope. Two requests on the same tunnel with the same preset + upstream
-// proxy share the Transport; a different preset or different upstream proxy
-// gets a separate Transport within the same tunnel.
-type tunnelTransportKey struct {
-	preset   string
-	proxyURL string
-	insecure bool
-}
-
 func (f *tlsFingerprintInterceptor) RoundTrip(ctx context.Context, httpReq *http.Request, host string, proxy *proxykit.Proxy) (*http.Response, error) {
 	proxyURL := proxyToURL(proxy)
 	start := time.Now()
 	seed := GetTopLevelSeed(ctx)
 
-	// Prefer a tunnel-scoped Transport when available (normal MITM path). The
-	// Transport lives exactly as long as the client TLS tunnel, so its pool
-	// cannot leak across tunnels. No cookie jar, no redirect follower, no
-	// session-level retry — those client behaviors are gone by construction.
-	var tr *httpcloaktransport.Transport
-	var ownsTransport bool
-	transportSource := "fresh"
-	if scope := proxykit.GetTunnelScope(ctx); scope != nil {
-		key := tunnelTransportKey{preset: f.spec.Preset, proxyURL: proxyURL, insecure: f.insecure}
-		v := scope.GetOrSet(key, func() (any, func()) {
-			opts := f.spec.transportOptions(proxyURL, f.insecure)
-			t, terr := httpcloak.NewTransport(f.spec.Preset, opts...)
-			if terr != nil {
-				slog.Error("mitm.request failed to build transport",
-					"err", terr, "preset", f.spec.Preset)
-				return nil, func() {}
-			}
-			return t, t.Close
-		})
-		if v != nil {
-			tr = v.(*httpcloaktransport.Transport)
-			transportSource = "tunnel-scoped"
-		}
+	// Increment B: one upstream TLS connection per (tunnel, target host,
+	// preset, upstream proxy). Lives as long as the MITM tunnel. Bypasses
+	// the transport pool so sticky-IP affinity at the upstream proxy is
+	// structurally stable — no pool slot death, no silent fresh-CONNECT
+	// that re-runs sticky-session lookup.
+	//
+	// Requires a TunnelScope in ctx (normal MITM path). Without one we
+	// cannot own a conn beyond this single request, so fall back to the
+	// per-request Transport path for tests / direct use.
+	scope := proxykit.GetTunnelScope(ctx)
+	if scope == nil {
+		return f.roundTripFallback(ctx, httpReq, host, proxyURL, seed, start)
 	}
-	if tr == nil {
-		opts := f.spec.transportOptions(proxyURL, f.insecure)
-		t, terr := httpcloak.NewTransport(f.spec.Preset, opts...)
-		if terr != nil {
-			return nil, fmt.Errorf("building transport: %w", terr)
-		}
-		tr = t
-		ownsTransport = true
+
+	// httpReq.Host carries the client's Host: header, which for MITM is the
+	// authoritative target (may include a non-443 port). Fall back to the
+	// CONNECT host with :443 if Host is missing (old clients).
+	hostPort := httpReq.Host
+	if hostPort == "" {
+		hostPort = host + ":443"
+	} else if _, _, err := net.SplitHostPort(hostPort); err != nil {
+		hostPort = hostPort + ":443"
 	}
 
 	slog.Debug("mitm.request.begin",
@@ -345,39 +325,189 @@ func (f *tlsFingerprintInterceptor) RoundTrip(ctx context.Context, httpReq *http
 		"method", httpReq.Method,
 		"path", httpReq.URL.RequestURI(),
 		"seed", seed,
-		"transport", transportSource,
+		"transport", "owned-conn",
 		"upstream_proxy", redactProxyURL(proxyURL),
 		"preset", f.spec.Preset)
 
-	// Buffer the request body. See function docstring for why.
-	var reqBody io.Reader
-	var bodyLen int
-	if httpReq.Body != nil && httpReq.Method != http.MethodGet && httpReq.Method != http.MethodHead {
-		bodyBytes, readErr := io.ReadAll(httpReq.Body)
-		httpReq.Body.Close()
-		if readErr != nil {
-			slog.Warn("MITM request body buffering failed",
-				"host", host, "method", httpReq.Method, "path", httpReq.URL.RequestURI(),
-				"err", readErr)
-			if ownsTransport {
-				tr.Close()
-			}
-			return nil, fmt.Errorf("buffering request body: %w", readErr)
-		}
-		bodyLen = len(bodyBytes)
-		if bodyLen > 0 {
-			// Pass *bytes.Reader untyped so httpcloak's
-			// http.NewRequestWithContext can type-assert for ContentLength.
-			reqBody = bytes.NewReader(bodyBytes)
-		}
+	// Buffer the request body — bytes.Reader lets httpcloak's request
+	// builder type-assert for Content-Length rather than falling back to
+	// chunked encoding that some upstream APIs reject.
+	reqBody, bodyLen, err := bufferRequestBody(httpReq, host)
+	if err != nil {
+		return nil, err
 	}
 
-	resp, err := f.doRoundTrip(ctx, tr, httpReq, reqBody, host, proxyURL)
-	elapsed := time.Since(start)
+	oc, err := f.acquireOwnedConn(ctx, scope, hostPort, proxy, proxyURL)
+	if err != nil {
+		f.emitRequestEvent(host, httpReq, seed, "owned-conn", bodyLen, nil, time.Since(start), err)
+		return nil, fmt.Errorf("acquiring owned conn for %s: %w", hostPort, err)
+	}
 
-	// Unified request event. Every MITM request produces exactly one of
-	// these — success or failure — with the same field shape. Grep/aggregate
-	// by `mitm.request`; classify errors by `err_kind` not by error string.
+	treq := &httpcloaktransport.Request{
+		Method:     httpReq.Method,
+		URL:        f.buildTargetURL(httpReq, host),
+		Headers:    filterRequestHeaders(httpReq.Header),
+		BodyReader: reqBody,
+	}
+	if err := f.spec.applyUserAgentPolicy(treq.Headers); err != nil {
+		return nil, err
+	}
+
+	resp, err := f.doOwnedConnRoundTrip(ctx, oc, treq)
+	elapsed := time.Since(start)
+	httpResp := f.buildHTTPResponseFromTransport(resp)
+
+	f.emitRequestEvent(host, httpReq, seed, "owned-conn-"+oc.proto, bodyLen, httpResp, elapsed, err)
+	if err != nil {
+		return nil, fmt.Errorf("httpcloak %s: %w", treq.URL, err)
+	}
+	return httpResp, nil
+}
+
+// roundTripFallback is the per-request Transport path used when no
+// TunnelScope is available (tests, direct use). Does not own a connection
+// beyond this call. Kept so that non-MITM use of the interceptor still
+// works; production MITM always goes through the owned-conn path above.
+func (f *tlsFingerprintInterceptor) roundTripFallback(
+	ctx context.Context,
+	httpReq *http.Request,
+	host, proxyURL string,
+	seed uint64,
+	start time.Time,
+) (*http.Response, error) {
+	opts := f.spec.transportOptions(proxyURL, f.insecure)
+	tr, err := httpcloak.NewTransport(f.spec.Preset, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("building transport: %w", err)
+	}
+	defer tr.Close()
+
+	reqBody, bodyLen, err := bufferRequestBody(httpReq, host)
+	if err != nil {
+		return nil, err
+	}
+
+	headers := filterRequestHeaders(httpReq.Header)
+	if err := f.spec.applyUserAgentPolicy(headers); err != nil {
+		return nil, err
+	}
+	treq := &httpcloaktransport.Request{
+		Method:     httpReq.Method,
+		URL:        f.buildTargetURL(httpReq, host),
+		Headers:    headers,
+		BodyReader: reqBody,
+	}
+
+	resp, err := tr.Do(ctx, treq)
+	elapsed := time.Since(start)
+	httpResp := f.buildHTTPResponseFromTransport(resp)
+
+	f.emitRequestEvent(host, httpReq, seed, "fresh", bodyLen, httpResp, elapsed, err)
+	if err != nil {
+		return nil, fmt.Errorf("httpcloak %s: %w", treq.URL, err)
+	}
+	return httpResp, nil
+}
+
+// bufferRequestBody reads the MITM client request body into memory and
+// returns a *bytes.Reader (type-detected by httpcloak for Content-Length).
+// Safe for replay; caller discards the original body.
+func bufferRequestBody(httpReq *http.Request, host string) (io.Reader, int, error) {
+	if httpReq.Body == nil || httpReq.Method == http.MethodGet || httpReq.Method == http.MethodHead {
+		return nil, 0, nil
+	}
+	bodyBytes, err := io.ReadAll(httpReq.Body)
+	httpReq.Body.Close()
+	if err != nil {
+		slog.Warn("MITM request body buffering failed",
+			"host", host, "method", httpReq.Method, "path", httpReq.URL.RequestURI(),
+			"err", err)
+		return nil, 0, fmt.Errorf("buffering request body: %w", err)
+	}
+	if len(bodyBytes) == 0 {
+		return nil, 0, nil
+	}
+	return bytes.NewReader(bodyBytes), len(bodyBytes), nil
+}
+
+// filterRequestHeaders strips hop-by-hop proxy headers that must not be
+// forwarded to the target server.
+func filterRequestHeaders(in http.Header) map[string][]string {
+	out := make(map[string][]string, len(in))
+	for k, vs := range in {
+		lower := strings.ToLower(k)
+		if lower == "connection" || lower == "proxy-authorization" || lower == "proxy-connection" {
+			continue
+		}
+		out[k] = vs
+	}
+	return out
+}
+
+// buildTargetURL constructs the full https URL we hand to the upstream
+// roundtripper, preferring httpReq.Host (which preserves non-standard
+// ports like :8443) over the MITM-stripped host.
+func (f *tlsFingerprintInterceptor) buildTargetURL(httpReq *http.Request, host string) string {
+	urlHost := httpReq.Host
+	if urlHost == "" {
+		urlHost = host
+	}
+	return fmt.Sprintf("https://%s%s", urlHost, httpReq.URL.RequestURI())
+}
+
+// buildHTTPResponseFromTransport converts a transport.Response into the
+// *http.Response the MITM handler writes back to the client.  Transport
+// already decompresses per Content-Encoding, so those framing headers are
+// stripped before the response is re-serialised by the MITM loop.
+func (f *tlsFingerprintInterceptor) buildHTTPResponseFromTransport(resp *httpcloaktransport.Response) *http.Response {
+	if resp == nil {
+		return nil
+	}
+	data, err := resp.Bytes()
+	if err != nil {
+		// Body read failure surfaces at the caller via the error return
+		// path; return a minimal shell so the event emitter can still log
+		// the status code.
+		return &http.Response{
+			StatusCode: resp.StatusCode,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(bytes.NewReader(nil)),
+		}
+	}
+	httpResp := &http.Response{
+		StatusCode:    resp.StatusCode,
+		Status:        fmt.Sprintf("%d %s", resp.StatusCode, http.StatusText(resp.StatusCode)),
+		Proto:         "HTTP/1.1",
+		ProtoMajor:    1,
+		ProtoMinor:    1,
+		Header:        make(http.Header),
+		Body:          io.NopCloser(bytes.NewReader(data)),
+		ContentLength: int64(len(data)),
+	}
+	for k, vs := range resp.Headers {
+		for _, v := range vs {
+			httpResp.Header.Add(k, v)
+		}
+	}
+	httpResp.Header.Del("Content-Encoding")
+	httpResp.Header.Del("Content-Length")
+	httpResp.Header.Del("Transfer-Encoding")
+	return httpResp
+}
+
+// emitRequestEvent writes the unified `mitm.request` structured event
+// shared across success and failure paths. Fields and levels are kept
+// identical to Increment A so existing log pipelines do not break.
+func (f *tlsFingerprintInterceptor) emitRequestEvent(
+	host string,
+	httpReq *http.Request,
+	seed uint64,
+	transportSource string,
+	bodyLen int,
+	resp *http.Response,
+	elapsed time.Duration,
+	err error,
+) {
 	event := MITMRequestEvent{
 		Host:       host,
 		Seed:       seed,
@@ -392,17 +522,9 @@ func (f *tlsFingerprintInterceptor) RoundTrip(ctx context.Context, httpReq *http
 		event.Status = resp.StatusCode
 		event.ContentLen = resp.ContentLength
 	}
-
 	if err != nil {
 		event.Err = err
 		event.ErrKind = ClassifyError(err)
-		if ownsTransport {
-			tr.Close()
-		}
-		// Tunnel-scoped transports are owned by the tunnel lifecycle; do
-		// not evict on a single request error. If the upstream is truly
-		// dead the next request fails the same way and the caller tears
-		// the tunnel down.
 		slog.Warn("mitm.request",
 			"host", event.Host,
 			"method", event.Method,
@@ -416,9 +538,8 @@ func (f *tlsFingerprintInterceptor) RoundTrip(ctx context.Context, httpReq *http
 			"err_kind", string(event.ErrKind),
 			"err", event.Err,
 			"retryable", event.ErrKind.IsSafeToRetry())
-		return nil, err
+		return
 	}
-
 	slog.Debug("mitm.request",
 		"host", event.Host,
 		"method", event.Method,
@@ -430,11 +551,6 @@ func (f *tlsFingerprintInterceptor) RoundTrip(ctx context.Context, httpReq *http
 		"status", event.Status,
 		"content_length", event.ContentLen,
 		"elapsed_ms", event.Elapsed.Milliseconds())
-
-	if ownsTransport {
-		tr.Close()
-	}
-	return resp, nil
 }
 
 // redactProxyURL returns the proxy URL with password stripped — the username
@@ -457,99 +573,28 @@ func redactProxyURL(u string) string {
 	return u[:i+3] + authPart[:colon] + ":<redacted>" + u[i+3+j:]
 }
 
-func (f *tlsFingerprintInterceptor) doRoundTrip(ctx context.Context, tr *httpcloaktransport.Transport, httpReq *http.Request, reqBody io.Reader, host, proxyURL string) (*http.Response, error) {
-	urlHost := httpReq.Host
-	if urlHost == "" {
-		urlHost = host
-	}
-	targetURL := fmt.Sprintf("https://%s%s", urlHost, httpReq.URL.RequestURI())
-
-	headers := make(map[string][]string)
-	for k, vs := range httpReq.Header {
-		lower := strings.ToLower(k)
-		if lower == "connection" || lower == "proxy-authorization" || lower == "proxy-connection" {
-			continue
-		}
-		headers[k] = vs
-	}
-
-	if err := f.spec.applyUserAgentPolicy(headers); err != nil {
+// DialTLS implements proxykit.WebSocketDialer. It dials the target with a
+// browser-like TLS fingerprint using utls, optionally through an upstream
+// proxy. target is "host:port".
+func (f *tlsFingerprintInterceptor) DialTLS(ctx context.Context, target string, proxy *proxykit.Proxy) (net.Conn, error) {
+	tlsConn, err := f.dialUpstreamTLS(ctx, target, proxy)
+	if err != nil {
 		return nil, err
 	}
-
-	treq := &httpcloaktransport.Request{
-		Method:     httpReq.Method,
-		URL:        targetURL,
-		Headers:    headers,
-		BodyReader: reqBody,
-	}
-
-	slog.Debug("transport.Do begin",
-		"target", targetURL, "method", httpReq.Method,
-		"header_count", len(headers), "has_body", reqBody != nil)
-	doStart := time.Now()
-
-	resp, err := tr.Do(ctx, treq)
-	if err != nil {
-		slog.Debug("transport.Do failed",
-			"target", targetURL, "method", httpReq.Method,
-			"elapsed_ms", time.Since(doStart).Milliseconds(),
-			"err", err)
-		return nil, fmt.Errorf("httpcloak %s: %w", targetURL, err)
-	}
-	slog.Debug("transport.Do returned",
-		"target", targetURL, "method", httpReq.Method,
-		"status", resp.StatusCode, "protocol", resp.Protocol,
-		"elapsed_ms", time.Since(doStart).Milliseconds())
-
-	// transport.Response.Bytes() reads the body fully, closes it, and caches.
-	// Transport already decompresses per Content-Encoding and hands us the
-	// decoded bytes, so Content-Encoding/Content-Length/Transfer-Encoding
-	// response headers are stale and must be stripped before we hand the
-	// response to the MITM client (which will re-frame based on our buffer).
-	bodyStart := time.Now()
-	data, err := resp.Bytes()
-	if err != nil {
-		slog.Debug("transport body read failed",
-			"target", targetURL, "status", resp.StatusCode,
-			"elapsed_ms", time.Since(bodyStart).Milliseconds(),
-			"err", err)
-		return nil, fmt.Errorf("reading transport body for %s: %w", targetURL, err)
-	}
-	slog.Debug("transport body read complete",
-		"target", targetURL, "bytes", len(data),
-		"elapsed_ms", time.Since(bodyStart).Milliseconds())
-
-	httpResp := &http.Response{
-		StatusCode:    resp.StatusCode,
-		Status:        fmt.Sprintf("%d %s", resp.StatusCode, http.StatusText(resp.StatusCode)),
-		Proto:         "HTTP/1.1",
-		ProtoMajor:    1,
-		ProtoMinor:    1,
-		Header:        make(http.Header),
-		Body:          io.NopCloser(bytes.NewReader(data)),
-		ContentLength: int64(len(data)),
-	}
-	for k, vs := range resp.Headers {
-		for _, v := range vs {
-			httpResp.Header.Add(k, v)
-		}
-	}
-	httpResp.Header.Del("Content-Encoding")
-	httpResp.Header.Del("Content-Length")
-	httpResp.Header.Del("Transfer-Encoding")
-	return httpResp, nil
+	return tlsConn, nil
 }
 
-// closeHTTPCloakBody closes just the underlying HTTP response body of an
-// httpcloak StreamResponse, without canceling the session context. This frees
-// the H2 stream / H1 connection for reuse while keeping the session alive.
+// dialUpstreamTLS dials target through proxy (or direct if proxy.Host is
+// empty) with the preset's TCP + TLS fingerprint applied, completes the TLS
+// handshake, and returns a post-handshake *utls.UConn. Callers can inspect
+// ConnectionState().NegotiatedProtocol to dispatch between HTTP/1.1 and
+// HTTP/2 framers on the returned conn.
 //
-// httpcloak's StreamResponse.Close() always calls cancel() which poisons the
-// DialTLS implements proxykit.WebSocketDialer. It dials the target with a
-// browser-like TLS fingerprint using utls, optionally through an upstream proxy.
-// target is "host:port".
-func (f *tlsFingerprintInterceptor) DialTLS(ctx context.Context, target string, proxy *proxykit.Proxy) (net.Conn, error) {
+// This is the lowest-level upstream primitive in this package. It owns no
+// pool and has no retry — the caller owns the returned conn's lifecycle.
+// WebSocket upgrade (DialTLS) and owned-conn MITM roundtrip both build on
+// this.
+func (f *tlsFingerprintInterceptor) dialUpstreamTLS(ctx context.Context, target string, proxy *proxykit.Proxy) (*utls.UConn, error) {
 	preset := fingerprint.Get(f.spec.Preset)
 	host, _, _ := net.SplitHostPort(target)
 

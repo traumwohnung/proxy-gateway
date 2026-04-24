@@ -2254,3 +2254,110 @@ func TestE2E_MITM_NoRedirectFollow(t *testing.T) {
 		t.Fatalf("Location = %q, want %q — proxy rewrote the Location header", got, want)
 	}
 }
+
+// TestE2E_MITM_OwnedConn_SingleCONNECT is the core Increment B invariant:
+// one MITM tunnel must result in exactly one CONNECT to the upstream
+// residential proxy, regardless of how many requests flow through it.
+// Pre-B, each MITM tunnel could trigger multiple upstream CONNECTs due to
+// H1 pool behavior, each one running a fresh sticky-session lookup that
+// could land on a different exit IP. Post-B, per-tunnel owned connections
+// eliminate the class entirely.
+func TestE2E_MITM_OwnedConn_SingleCONNECT(t *testing.T) {
+	ca, err := proxykit.NewCA()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Target server
+	fp, _ := proxykit.NewForgedCertProvider(ca)
+	cert, _ := fp.CertForHost("127.0.0.1")
+	targetLn, _ := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		Certificates: []tls.Certificate{*cert},
+		NextProtos:   []string{"h2", "http/1.1"},
+	})
+	var reqCount int32
+	targetSrv := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			n := atomic.AddInt32(&reqCount, 1)
+			fmt.Fprintf(w, "req%d", n)
+		}),
+	}
+	go targetSrv.Serve(targetLn)
+	defer targetSrv.Close()
+	targetPort := mustPort(t, targetLn.Addr().String())
+
+	// Upstream CONNECT proxy with per-tunnel CONNECT counter.
+	var connectCount int32
+	upstreamLn, _ := net.Listen("tcp", "127.0.0.1:0")
+	upstreamPort := mustPort(t, upstreamLn.Addr().String())
+	go func() {
+		for {
+			conn, err := upstreamLn.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				br := bufio.NewReader(c)
+				req, err := http.ReadRequest(br)
+				if err != nil || req.Method != "CONNECT" {
+					return
+				}
+				atomic.AddInt32(&connectCount, 1)
+				target, err := net.Dial("tcp", req.Host)
+				if err != nil {
+					fmt.Fprintf(c, "HTTP/1.1 502 Bad Gateway\r\n\r\n")
+					return
+				}
+				defer target.Close()
+				fmt.Fprintf(c, "HTTP/1.1 200 Connection Established\r\n\r\n")
+				done := make(chan struct{}, 2)
+				go func() { io.Copy(target, br); done <- struct{}{} }()
+				go func() { io.Copy(c, target); done <- struct{}{} }()
+				<-done
+			}(conn)
+		}
+	}()
+	defer upstreamLn.Close()
+
+	// Proxy-gateway with httpcloak MITM, routing through upstream proxy
+	inner := staticSource(&proxykit.Proxy{Host: "127.0.0.1", Port: upstreamPort})
+	pipeline := utils.TLSFingerprintSpoofingWithOptions(ca, "chrome-146", true, inner)
+	proxyAddr, closeProxy := startHTTPProxy(t, pipeline, proxykit.HTTPUpstream{})
+	defer closeProxy()
+
+	caPool, _ := caX509Pool(ca)
+	proxyURL := &url.URL{Scheme: "http", Host: proxyAddr, User: url.UserPassword("", "")}
+
+	// One client with one tunnel — http.Transport pools under the hood, so
+	// a single Transport produces at most one CONNECT to proxy-gateway,
+	// which in turn drives one owned upstream conn.
+	client := &http.Client{
+		Transport: &http.Transport{
+			Proxy:               http.ProxyURL(proxyURL),
+			TLSClientConfig:     &tls.Config{RootCAs: caPool},
+			MaxIdleConnsPerHost: 1,
+			MaxConnsPerHost:     1,
+		},
+		Timeout: 15 * time.Second,
+	}
+
+	for i := 0; i < 10; i++ {
+		url := fmt.Sprintf("https://127.0.0.1:%d/req%d", targetPort, i)
+		resp, err := client.Get(url)
+		if err != nil {
+			t.Fatalf("request %d failed: %v", i+1, err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
+
+	got := atomic.LoadInt32(&connectCount)
+	if got != 1 {
+		t.Fatalf("connectCount = %d, want 1 (one tunnel should produce exactly one upstream CONNECT)", got)
+	}
+	if served := atomic.LoadInt32(&reqCount); served != 10 {
+		t.Fatalf("target served %d requests, want 10", served)
+	}
+	t.Logf("10 requests on 1 tunnel used %d upstream CONNECT(s) — owned-conn invariant holds", got)
+}
