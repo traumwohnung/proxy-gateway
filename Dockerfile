@@ -18,7 +18,7 @@ FROM scratch
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /build/proxy-gateway/proxy-gateway-server /proxy-gateway-server
 
-EXPOSE 8100
+EXPOSE 8100 9000
 
 ENTRYPOINT ["/proxy-gateway-server"]
 CMD ["/data/config/config.yaml"]

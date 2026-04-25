@@ -11,8 +11,9 @@
 # - minutes: 0 (new IP every request) to 1440 (24h sticky session)
 # - sessionkey: alphanumeric session identifier
 
-bind_addr = "0.0.0.0:8100"
-log_level = "info"
+bind_addr  = "0.0.0.0:8100"
+admin_addr = "0.0.0.0:9000"
+log_level  = "info"
 
 # MITM CA for httpcloak TLS fingerprint spoofing.
 # Paths are relative to the config directory.
