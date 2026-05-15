@@ -1,67 +1,76 @@
 import { useForm } from '@tanstack/react-form';
 import { useEffect } from 'react';
+import { useStore } from '../lib/store';
+import { format } from 'date-fns';
+import { CalendarIcon, Plus, X } from 'lucide-react';
+import { Button } from './ui/button';
+import { Input } from './ui/input';
+import { Label } from './ui/label';
+import { Badge } from './ui/badge';
+import { Calendar } from './ui/calendar';
+import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from './ui/select';
 import type { UsageQuery, Metric, Dimension } from '../../db/query';
+import { cn } from '../lib/utils';
 
 type ResUnit = 'none' | 'minute' | 'hour' | 'day';
 
 interface FormValues {
-  from:      string;   // ISO local datetime
-  to:        string;
-  res_unit:  ResUnit;
+  from: Date;
+  to: Date;
+  res_unit: ResUnit;
   res_value: number;
-  metric:    Metric;
+  metric: Metric;
   where: {
-    proxyset_eq:           string;
-    session_duration_gte:  string;
-    session_duration_lte:  string;
-    session_params_eq:     { key: string; value: string }[];
-    session_params_has_key:{ key: string }[];
+    proxyset_eq: string;
+    session_duration_gte: string;
+    session_duration_lte: string;
+    session_params_eq: { key: string; value: string }[];
+    session_params_has_key: { key: string }[];
   };
-  group_by:  { kind: 'proxyset' | 'json'; key: string }[];
-  sort_by:   string;
-  sort_dir:  'asc' | 'desc';
-  limit:     number;
+  group_by: { kind: 'proxyset' | 'json'; key: string }[];
+  sort_by: string;
+  sort_dir: 'asc' | 'desc';
+  limit: number;
 }
 
 const METRICS: Metric[] = ['connections', 'upload_bytes', 'download_bytes', 'total_bytes'];
 
-const inputCls = 'rounded border border-border bg-background px-2 py-1 text-xs';
-const btnCls   = 'rounded border border-border bg-background hover:bg-muted px-2 py-1 text-xs';
-
-function pad(n: number): string { return String(n).padStart(2, '0'); }
-function tsToLocal(ts: number): string {
-  const d = new Date(ts * 1000);
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-function localToTs(s: string): number { return Math.floor(new Date(s).getTime() / 1000); }
-
 function queryToValues(q: UsageQuery): FormValues {
   const w = q.where ?? {};
   return {
-    from:      tsToLocal(q.time.from),
-    to:        tsToLocal(q.time.to),
-    res_unit:  (q.time.resolution?.unit ?? 'none') as ResUnit,
+    from: new Date(q.time.from * 1000),
+    to: new Date(q.time.to * 1000),
+    res_unit: (q.time.resolution?.unit ?? 'none') as ResUnit,
     res_value: q.time.resolution?.value ?? 1,
-    metric:    q.metric,
+    metric: q.metric,
     where: {
-      proxyset_eq:            w.proxyset_eq ?? '',
-      session_duration_gte:   w.session_duration_gte != null ? String(w.session_duration_gte) : '',
-      session_duration_lte:   w.session_duration_lte != null ? String(w.session_duration_lte) : '',
-      session_params_eq:      (w.session_params_eq ?? []).map((e) => ({ key: e.key, value: String(e.value) })),
+      proxyset_eq: w.proxyset_eq ?? '',
+      session_duration_gte: w.session_duration_gte != null ? String(w.session_duration_gte) : '',
+      session_duration_lte: w.session_duration_lte != null ? String(w.session_duration_lte) : '',
+      session_params_eq: (w.session_params_eq ?? []).map((e) => ({ key: e.key, value: String(e.value) })),
       session_params_has_key: (w.session_params_has_key ?? []).map((k) => ({ key: k })),
     },
-    group_by:  (q.group_by ?? []).map((d) => d.kind === 'proxyset' ? { kind: 'proxyset' as const, key: '' } : { kind: 'json' as const, key: d.key }),
-    sort_by:   q.sort?.by  ?? 'metric',
-    sort_dir:  q.sort?.dir ?? 'desc',
-    limit:     q.limit ?? 100,
+    group_by: (q.group_by ?? []).map((d) =>
+      d.kind === 'proxyset' ? { kind: 'proxyset' as const, key: '' } : { kind: 'json' as const, key: d.key },
+    ),
+    sort_by: q.sort?.by ?? 'metric',
+    sort_dir: q.sort?.dir ?? 'desc',
+    limit: q.limit ?? 100,
   };
 }
 
 function valuesToQuery(v: FormValues): UsageQuery {
   const next: UsageQuery = {
     time: {
-      from: localToTs(v.from),
-      to:   localToTs(v.to),
+      from: Math.floor(v.from.getTime() / 1000),
+      to: Math.floor(v.to.getTime() / 1000),
       ...(v.res_unit === 'none'
         ? {}
         : { resolution: { unit: v.res_unit, value: Math.max(1, Number(v.res_value) || 1) } }),
@@ -81,237 +90,486 @@ function valuesToQuery(v: FormValues): UsageQuery {
 
   const groups: Dimension[] = v.group_by
     .filter((g) => g.kind === 'proxyset' || g.key.trim())
-    .map((g) => g.kind === 'proxyset' ? { kind: 'proxyset' } : { kind: 'json', key: g.key.trim() });
+    .map((g) => (g.kind === 'proxyset' ? { kind: 'proxyset' } : { kind: 'json', key: g.key.trim() }));
   if (groups.length) next.group_by = groups;
 
   if (v.sort_by) next.sort = { by: v.sort_by, dir: v.sort_dir };
-  if (v.limit)   next.limit = Math.min(1000, Math.max(1, Number(v.limit) || 100));
-
+  if (v.limit) next.limit = Math.min(1000, Math.max(1, Number(v.limit) || 100));
   return next;
 }
 
 interface Props {
-  query:    UsageQuery;
+  query: UsageQuery;
   onSubmit: (q: UsageQuery) => void;
-  loading:  boolean;
+  isLoading: boolean;
 }
 
-export default function QueryForm({ query, onSubmit, loading }: Props) {
+function DraftSync({ values, onSync }: { values: FormValues; onSync: (q: UsageQuery) => void }) {
+  useEffect(() => { onSync(valuesToQuery(values)); }, [values, onSync]);
+  return null;
+}
+
+export default function QueryForm({ query, onSubmit, isLoading }: Props) {
+  const setDraftQuery = useStore((s) => s.setDraftQuery);
+
   const form = useForm({
     defaultValues: queryToValues(query),
     onSubmit: ({ value }) => onSubmit(valuesToQuery(value)),
   });
 
-  // Re-seed when the query comes from outside.
-  useEffect(() => { form.reset(queryToValues(query)); /* eslint-disable-next-line */ }, [query]);
-
-  // Build sort_by options from current group_by names.
-  function sortByOptionsFrom(groups: FormValues['group_by']): string[] {
-    const opts = new Set<string>(['metric', 'time']);
-    for (const g of groups) {
-      const name = g.kind === 'proxyset' ? 'proxyset' : g.key.trim();
-      if (name) opts.add(name);
-    }
-    return [...opts];
-  }
+  useEffect(() => {
+    form.reset(queryToValues(query));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query]);
 
   return (
     <form
-      onSubmit={(e) => { e.preventDefault(); e.stopPropagation(); void form.handleSubmit(); }}
-      className="rounded-md border border-border bg-card p-4 grid gap-4 text-xs mb-6"
+      onSubmit={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        void form.handleSubmit();
+      }}
+      className="space-y-6"
     >
-      {/* ───── row 1: time + metric ───── */}
-      <div className="grid gap-3 grid-cols-2 md:grid-cols-5">
-        <form.Field name="from" children={(f) => (
-          <Field label="From">
-            <input type="datetime-local" className={inputCls}
-                   value={f.state.value} onChange={(e) => f.handleChange(e.target.value)} />
-          </Field>
-        )} />
-        <form.Field name="to" children={(f) => (
-          <Field label="To">
-            <input type="datetime-local" className={inputCls}
-                   value={f.state.value} onChange={(e) => f.handleChange(e.target.value)} />
-          </Field>
-        )} />
-        <form.Field name="res_unit" children={(f) => (
-          <Field label="Resolution unit">
-            <select className={inputCls} value={f.state.value}
-                    onChange={(e) => f.handleChange(e.target.value as ResUnit)}>
-              <option value="none">none</option>
-              <option value="minute">minute</option>
-              <option value="hour">hour</option>
-              <option value="day">day</option>
-            </select>
-          </Field>
-        )} />
-        <form.Field name="res_value" children={(f) => (
-          <Field label="Resolution value">
-            <input type="number" min={1} className={inputCls}
-                   value={f.state.value} onChange={(e) => f.handleChange(Number(e.target.value))} />
-          </Field>
-        )} />
-        <form.Field name="metric" children={(f) => (
-          <Field label="Metric">
-            <select className={inputCls} value={f.state.value}
-                    onChange={(e) => f.handleChange(e.target.value as Metric)}>
-              {METRICS.map((m) => <option key={m} value={m}>{m}</option>)}
-            </select>
-          </Field>
-        )} />
+      {/* Live-publish draft to zustand so the JSON panel updates on every keystroke. */}
+      <form.Subscribe
+        selector={(s) => s.values}
+        children={(values) => <DraftSync values={values} onSync={setDraftQuery} />}
+      />
+
+      {/* ── Time range ── */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <form.Field
+          name="from"
+          children={(f) => (
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground font-medium">From</Label>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    className={cn(
+                      'w-full justify-start text-left font-normal',
+                      !f.state.value && 'text-muted-foreground',
+                    )}
+                  >
+                    <CalendarIcon className="mr-2 h-4 w-4 text-muted-foreground" />
+                    {f.state.value ? format(f.state.value, 'MMM d, yyyy') : 'Select date'}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start">
+                  <Calendar mode="single" selected={f.state.value} onSelect={(d) => d && f.handleChange(d)} />
+                </PopoverContent>
+              </Popover>
+            </div>
+          )}
+        />
+
+        <form.Field
+          name="to"
+          children={(f) => (
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground font-medium">To</Label>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    className={cn(
+                      'w-full justify-start text-left font-normal',
+                      !f.state.value && 'text-muted-foreground',
+                    )}
+                  >
+                    <CalendarIcon className="mr-2 h-4 w-4 text-muted-foreground" />
+                    {f.state.value ? format(f.state.value, 'MMM d, yyyy') : 'Select date'}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start">
+                  <Calendar mode="single" selected={f.state.value} onSelect={(d) => d && f.handleChange(d)} />
+                </PopoverContent>
+              </Popover>
+            </div>
+          )}
+        />
+
+        <div className="space-y-2">
+          <Label className="text-xs text-muted-foreground font-medium">Resolution</Label>
+          <div className="flex gap-2">
+            <form.Field
+              name="res_value"
+              children={(f) => (
+                <Input
+                  type="number"
+                  className="w-20"
+                  min={1}
+                  value={f.state.value}
+                  onChange={(e) => f.handleChange(Number(e.target.value) || 1)}
+                />
+              )}
+            />
+            <form.Field
+              name="res_unit"
+              children={(f) => (
+                <Select value={f.state.value} onValueChange={(v) => f.handleChange(v as ResUnit)}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">None</SelectItem>
+                    <SelectItem value="minute">Minute</SelectItem>
+                    <SelectItem value="hour">Hour</SelectItem>
+                    <SelectItem value="day">Day</SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
+            />
+          </div>
+        </div>
+
       </div>
 
-      {/* ───── row 2: simple filters ───── */}
-      <div className="grid gap-3 grid-cols-2 md:grid-cols-3">
-        <form.Field name="where.proxyset_eq" children={(f) => (
-          <Field label="Proxyset =">
-            <input className={inputCls} placeholder="(any)"
-                   value={f.state.value} onChange={(e) => f.handleChange(e.target.value)} />
-          </Field>
-        )} />
-        <form.Field name="where.session_duration_gte" children={(f) => (
-          <Field label="Session duration ≥ (min)">
-            <input type="number" min={0} className={inputCls}
-                   value={f.state.value} onChange={(e) => f.handleChange(e.target.value)} />
-          </Field>
-        )} />
-        <form.Field name="where.session_duration_lte" children={(f) => (
-          <Field label="Session duration ≤ (min)">
-            <input type="number" min={0} className={inputCls}
-                   value={f.state.value} onChange={(e) => f.handleChange(e.target.value)} />
-          </Field>
-        )} />
+      {/* ── Metric + Proxyset ── */}
+      <div className="flex gap-4">
+        <div className="space-y-2 flex-1">
+          <Label className="text-xs text-muted-foreground font-medium">Metric</Label>
+          <form.Field
+            name="metric"
+            children={(f) => (
+              <Select value={f.state.value} onValueChange={(v) => f.handleChange(v as Metric)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {METRICS.map((m) => (
+                    <SelectItem key={m} value={m}>
+                      {m.replace(/_/g, ' ')}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          />
+        </div>
+        <form.Field
+          name="where.proxyset_eq"
+          children={(f) => (
+            <div className="space-y-2 flex-1">
+              <Label className="text-xs text-muted-foreground font-medium">Proxyset</Label>
+              <Input
+                value={f.state.value}
+                onChange={(e) => f.handleChange(e.target.value)}
+                placeholder="(any)"
+              />
+            </div>
+          )}
+        />
       </div>
 
-      {/* ───── group_by (array of rows) ───── */}
-      <form.Field name="group_by" mode="array" children={(f) => (
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-muted-foreground">Group by</span>
-            <button type="button" className={btnCls}
-                    onClick={() => f.pushValue({ kind: 'proxyset', key: '' })}>+ add</button>
-          </div>
-          <div className="grid gap-2">
-            {f.state.value.length === 0 && <div className="text-muted-foreground italic">(none — single series)</div>}
-            {f.state.value.map((_, i) => (
-              <div key={i} className="grid grid-cols-[10rem_1fr_auto] gap-2 items-center">
-                <form.Field name={`group_by[${i}].kind`} children={(sub) => (
-                  <select className={inputCls} value={sub.state.value as 'proxyset'|'json'}
-                          onChange={(e) => sub.handleChange(e.target.value as 'proxyset'|'json')}>
-                    <option value="proxyset">proxyset</option>
-                    <option value="json">json key</option>
-                  </select>
-                )} />
-                <form.Field name={`group_by[${i}].kind`} children={(sub) => (
-                  sub.state.value === 'json'
-                    ? (
-                      <form.Field name={`group_by[${i}].key`} children={(kf) => (
-                        <input className={inputCls} placeholder="json key (e.g. user)"
-                               value={kf.state.value} onChange={(e) => kf.handleChange(e.target.value)} />
-                      )} />
-                    )
-                    : <div className="text-muted-foreground">—</div>
-                )} />
-                <button type="button" className={btnCls} onClick={() => f.removeValue(i)}>×</button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )} />
+      {/* ── Session Duration range ── */}
+      <div className="flex gap-4">
+        <form.Field
+          name="where.session_duration_gte"
+          children={(f) => (
+            <div className="space-y-2 flex-1">
+              <Label className="text-xs text-muted-foreground font-medium">Session Duration ≥ (min)</Label>
+              <Input
+                type="number"
+                min={0}
+                value={f.state.value}
+                onChange={(e) => f.handleChange(e.target.value)}
+                placeholder="0"
+              />
+            </div>
+          )}
+        />
+        <form.Field
+          name="where.session_duration_lte"
+          children={(f) => (
+            <div className="space-y-2 flex-1">
+              <Label className="text-xs text-muted-foreground font-medium">Session Duration ≤ (min)</Label>
+              <Input
+                type="number"
+                min={0}
+                value={f.state.value}
+                onChange={(e) => f.handleChange(e.target.value)}
+                placeholder="∞"
+              />
+            </div>
+          )}
+        />
+      </div>
 
-      {/* ───── session_params_eq (array) ───── */}
-      <form.Field name="where.session_params_eq" mode="array" children={(f) => (
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-muted-foreground">session_params equals</span>
-            <button type="button" className={btnCls}
-                    onClick={() => f.pushValue({ key: '', value: '' })}>+ add</button>
-          </div>
-          <div className="grid gap-2">
-            {f.state.value.length === 0 && <div className="text-muted-foreground italic">(no filters)</div>}
-            {f.state.value.map((_, i) => (
-              <div key={i} className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
-                <form.Field name={`where.session_params_eq[${i}].key`} children={(sub) => (
-                  <input className={inputCls} placeholder="key"
-                         value={sub.state.value} onChange={(e) => sub.handleChange(e.target.value)} />
-                )} />
-                <form.Field name={`where.session_params_eq[${i}].value`} children={(sub) => (
-                  <input className={inputCls} placeholder="value"
-                         value={sub.state.value} onChange={(e) => sub.handleChange(e.target.value)} />
-                )} />
-                <button type="button" className={btnCls} onClick={() => f.removeValue(i)}>×</button>
+      {/* ── Group By ── */}
+      <form.Field
+        name="group_by"
+        mode="array"
+        children={(f) => (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <Label className="text-xs text-muted-foreground font-medium">Group By</Label>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => f.pushValue({ kind: 'proxyset', key: '' })}
+                className="h-7 text-xs text-primary hover:text-primary/80 hover:bg-primary/10"
+              >
+                <Plus className="h-3 w-3 mr-1" /> Add
+              </Button>
+            </div>
+            {f.state.value.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No grouping configured</p>
+            ) : (
+              <div className="space-y-2">
+                {f.state.value.map((_, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <form.Field
+                      name={`group_by[${i}].kind`}
+                      children={(sub) => (
+                        <Select
+                          value={sub.state.value as 'proxyset' | 'json'}
+                          onValueChange={(v) => sub.handleChange(v as 'proxyset' | 'json')}
+                        >
+                          <SelectTrigger className="w-36">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="proxyset">Proxyset</SelectItem>
+                            <SelectItem value="json">JSON Key</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      )}
+                    />
+                    <form.Field
+                      name={`group_by[${i}].kind`}
+                      children={(sub) =>
+                        sub.state.value === 'json' ? (
+                          <form.Field
+                            name={`group_by[${i}].key`}
+                            children={(kf) => (
+                              <Input
+                                className="flex-1"
+                                placeholder="e.g. user"
+                                value={kf.state.value}
+                                onChange={(e) => kf.handleChange(e.target.value)}
+                              />
+                            )}
+                          />
+                        ) : (
+                          <div className="flex-1" />
+                        )
+                      }
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => f.removeValue(i)}
+                      className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
           </div>
-        </div>
-      )} />
+        )}
+      />
 
-      {/* ───── session_params_has_key (array) ───── */}
-      <form.Field name="where.session_params_has_key" mode="array" children={(f) => (
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-muted-foreground">session_params has key</span>
-            <button type="button" className={btnCls}
-                    onClick={() => f.pushValue({ key: '' })}>+ add</button>
-          </div>
-          <div className="grid gap-2">
-            {f.state.value.length === 0 && <div className="text-muted-foreground italic">(no filters)</div>}
-            {f.state.value.map((_, i) => (
-              <div key={i} className="grid grid-cols-[1fr_auto] gap-2 items-center">
-                <form.Field name={`where.session_params_has_key[${i}].key`} children={(sub) => (
-                  <input className={inputCls} placeholder="key (e.g. user)"
-                         value={sub.state.value} onChange={(e) => sub.handleChange(e.target.value)} />
-                )} />
-                <button type="button" className={btnCls} onClick={() => f.removeValue(i)}>×</button>
+      {/* ── Session Params Equals ── */}
+      <form.Field
+        name="where.session_params_eq"
+        mode="array"
+        children={(f) => (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <Label className="text-xs text-muted-foreground font-medium">Session Params Equals</Label>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => f.pushValue({ key: '', value: '' })}
+                className="h-7 text-xs text-primary hover:text-primary/80 hover:bg-primary/10"
+              >
+                <Plus className="h-3 w-3 mr-1" /> Add
+              </Button>
+            </div>
+            {f.state.value.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No params filter configured</p>
+            ) : (
+              <div className="space-y-2">
+                {f.state.value.map((_, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <form.Field
+                      name={`where.session_params_eq[${i}].key`}
+                      children={(sub) => (
+                        <Input
+                          className="flex-1"
+                          placeholder="key"
+                          value={sub.state.value}
+                          onChange={(e) => sub.handleChange(e.target.value)}
+                        />
+                      )}
+                    />
+                    <span className="text-muted-foreground">=</span>
+                    <form.Field
+                      name={`where.session_params_eq[${i}].value`}
+                      children={(sub) => (
+                        <Input
+                          className="flex-1"
+                          placeholder="value"
+                          value={sub.state.value}
+                          onChange={(e) => sub.handleChange(e.target.value)}
+                        />
+                      )}
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => f.removeValue(i)}
+                      className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
           </div>
-        </div>
-      )} />
+        )}
+      />
 
-      {/* ───── sort + limit ───── */}
-      <div className="grid gap-3 grid-cols-3">
-        <form.Subscribe selector={(s) => s.values.group_by} children={(groups) => {
-          const opts = sortByOptionsFrom(groups);
+      {/* ── Session Params Has Key ── */}
+      <form.Field
+        name="where.session_params_has_key"
+        mode="array"
+        children={(f) => (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <Label className="text-xs text-muted-foreground font-medium">Session Params Has Key</Label>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => f.pushValue({ key: '' })}
+                className="h-7 text-xs text-primary hover:text-primary/80 hover:bg-primary/10"
+              >
+                <Plus className="h-3 w-3 mr-1" /> Add
+              </Button>
+            </div>
+            {f.state.value.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No key filter configured</p>
+            ) : (
+              <div className="space-y-2">
+                {f.state.value.map((_, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <form.Field
+                      name={`where.session_params_has_key[${i}].key`}
+                      children={(sub) => (
+                        <Input
+                          className="flex-1"
+                          placeholder="e.g. user"
+                          value={sub.state.value}
+                          onChange={(e) => sub.handleChange(e.target.value)}
+                        />
+                      )}
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => f.removeValue(i)}
+                      className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      />
+
+      {/* ── Sort & Limit ── */}
+      <form.Subscribe
+        selector={(s) => s.values.group_by}
+        children={(groups) => {
+          const opts = new Set<string>(['metric', 'time']);
+          for (const g of groups) {
+            const name = g.kind === 'proxyset' ? 'proxyset' : g.key.trim();
+            if (name) opts.add(name);
+          }
+          const sortOptions = [...opts];
           return (
-            <form.Field name="sort_by" children={(f) => (
-              <Field label="Sort by">
-                <select className={inputCls}
-                        value={opts.includes(f.state.value) ? f.state.value : 'metric'}
-                        onChange={(e) => f.handleChange(e.target.value)}>
-                  {opts.map((o) => <option key={o} value={o}>{o}</option>)}
-                </select>
-              </Field>
-            )} />
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <form.Field
+                name="sort_by"
+                children={(f) => (
+                  <div className="space-y-2">
+                    <Label className="text-xs text-muted-foreground font-medium">Sort By</Label>
+                    <Select
+                      value={sortOptions.includes(f.state.value) ? f.state.value : 'metric'}
+                      onValueChange={(v) => f.handleChange(v)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {sortOptions.map((o) => (
+                          <SelectItem key={o} value={o}>
+                            {o}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+              />
+              <form.Field
+                name="sort_dir"
+                children={(f) => (
+                  <div className="space-y-2">
+                    <Label className="text-xs text-muted-foreground font-medium">Direction</Label>
+                    <Select value={f.state.value} onValueChange={(v) => f.handleChange(v as 'asc' | 'desc')}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="desc">Descending</SelectItem>
+                        <SelectItem value="asc">Ascending</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+              />
+              <form.Field
+                name="limit"
+                children={(f) => (
+                  <div className="space-y-2">
+                    <Label className="text-xs text-muted-foreground font-medium">Limit</Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={1000}
+                      value={f.state.value}
+                      onChange={(e) => f.handleChange(Number(e.target.value) || 100)}
+                    />
+                  </div>
+                )}
+              />
+            </div>
           );
-        }} />
-        <form.Field name="sort_dir" children={(f) => (
-          <Field label="Sort dir">
-            <select className={inputCls} value={f.state.value}
-                    onChange={(e) => f.handleChange(e.target.value as 'asc'|'desc')}>
-              <option value="desc">desc</option>
-              <option value="asc">asc</option>
-            </select>
-          </Field>
-        )} />
-        <form.Field name="limit" children={(f) => (
-          <Field label="Limit">
-            <input type="number" min={1} max={1000} className={inputCls}
-                   value={f.state.value} onChange={(e) => f.handleChange(Number(e.target.value))} />
-          </Field>
-        )} />
-      </div>
+        }}
+      />
 
-      <div>
-        <button type="submit" disabled={loading}
-                className="rounded bg-primary text-primary-foreground px-3 py-1.5 disabled:opacity-50">
-          {loading ? 'Running…' : 'Run query'}
-        </button>
+      {/* ── Run ── */}
+      <div className="pt-2">
+        <Button type="submit" disabled={isLoading}>
+          {isLoading ? 'Running…' : 'Run Query'}
+        </Button>
       </div>
     </form>
   );
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return <label className="flex flex-col gap-1 text-muted-foreground">{label}{children}</label>;
 }
