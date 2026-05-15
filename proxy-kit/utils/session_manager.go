@@ -3,6 +3,7 @@ package utils
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -89,7 +90,7 @@ type sessionEntry struct {
 	proxy          proxykit.Proxy
 	seed           *proxykit.SessionSeed
 	rotation       uint64
-	resolveCtx     context.Context // carries domain values for re-resolve on force rotate
+	resolveCtx     context.Context // carries domain values for re-resolve on managed rotate
 	startedAt      time.Time
 	expiresAt      time.Time
 	lastRotationAt time.Time
@@ -102,12 +103,14 @@ type sessionEntry struct {
 // It reads GetTopLevelSeed/GetSeedTTL from context and:
 //
 //   - TTL > 0: looks up its cache keyed by the top-level seed. On hit, returns
-//     the cached proxy. On miss, computes SessionSeed = hash(topLevelSeed + rotation),
-//     stores it in context via proxykit.WithSessionSeed, calls next, and caches the result.
+//     the cached proxy. On miss, picks a random rotation, computes
+//     SessionSeed = hash(topLevelSeed + rotation), stores it in context
+//     via proxykit.WithSessionSeed, calls next, and caches the result.
 //   - TTL = 0 or zero seed: passes through with no SessionSeed in context (nil).
 //     Sources decide what nil means for their domain.
 //
-// ForceRotate bumps the rotation counter → new SessionSeed → new source choices.
+// RotateNow re-rolls rotation to a fresh random uint64 → new
+// SessionSeed → new source choices.
 type SessionManager struct {
 	next    proxykit.Handler
 	mu      sync.RWMutex
@@ -143,7 +146,8 @@ func (m *SessionManager) Resolve(ctx context.Context, req *proxykit.Request) (*p
 	}
 	m.mu.RUnlock()
 
-	seed := proxykit.NewSessionSeed(tls, 0)
+	rotation := rand.Uint64()
+	seed := proxykit.NewSessionSeed(tls, rotation)
 	ctx = proxykit.WithSessionSeed(ctx, seed)
 
 	result, err := m.next.Resolve(ctx, req)
@@ -157,7 +161,7 @@ func (m *SessionManager) Resolve(ctx context.Context, req *proxykit.Request) (*p
 		label:          GetSessionLabel(ctx),
 		proxy:          *result.Proxy,
 		seed:           seed,
-		rotation:       0,
+		rotation:       rotation,
 		resolveCtx:     ctx,
 		startedAt:      now,
 		expiresAt:      now.Add(ttl),
@@ -177,17 +181,17 @@ func (m *SessionManager) Resolve(ctx context.Context, req *proxykit.Request) (*p
 	return result, nil
 }
 
-// ForceRotate bumps the rotation counter for the given top-level seed,
-// producing a new SessionSeed, and re-resolves through the source using
-// the stored context.
-func (m *SessionManager) ForceRotate(topLevelSeed uint64) (*SessionInfo, error) {
+// RotateNow re-rolls the rotation for the given top-level seed to a
+// fresh random uint64, producing a new SessionSeed, and re-resolves
+// through the source using the stored context.
+func (m *SessionManager) RotateNow(topLevelSeed uint64) (*SessionInfo, error) {
 	m.mu.RLock()
 	e, ok := m.entries[topLevelSeed]
 	if !ok || !time.Now().Before(e.expiresAt) {
 		m.mu.RUnlock()
 		return nil, nil
 	}
-	nextRotation := e.rotation + 1
+	nextRotation := rand.Uint64()
 	resolveCtx := e.resolveCtx
 	duration := e.duration
 	m.mu.RUnlock()

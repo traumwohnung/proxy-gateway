@@ -40,7 +40,7 @@ Client ──CONNECT──→ proxy-gateway ──TLS termination──→ httpc
 - **Least-used rotation** — requests go to the proxy with the lowest use count.
 - **Session affinity** — pin a session to the same upstream proxy for a configurable duration (0–1440 minutes), encoded in the username.
 - **Per-proxy credentials** — each proxy entry includes its own username:password.
-- **REST admin API** — inspect active sessions and force-rotate sessions (separate `admin_addr`).
+- **REST admin API** — inspect active sessions and rotate sessions (separate `admin_addr`).
 - **Usage analytics** — per-hour upload/download byte buckets streamed over gRPC to the standalone [`analytics-service`](analytics-service/) (libSQL + Astro dashboard).
 
 ## Configuration
@@ -257,9 +257,9 @@ curl -H "Authorization: Bearer mysecretkey" http://127.0.0.1:9000/api/sessions
 
 Get a specific active session by its base64 username. Returns `404` if not found or expired. Sessions with `minutes=0` are never tracked.
 
-### `POST /api/sessions/{username}/rotate`
+### `POST /api/sessions/{username}/rotate-now`
 
-Force-rotate the upstream proxy for an existing session. Picks a new upstream, resets `next_rotation_at`, and updates `last_rotation_at`. Returns `404` if no active session exists.
+Re-roll the rotation for an existing session to a fresh random value. The gateway picks a new upstream, resets `next_rotation_at`, and updates `last_rotation_at`. Returns `404` if no active session exists.
 
 ```bash
 curl -X POST -H "Authorization: Bearer mysecretkey" \
@@ -295,7 +295,7 @@ npm install @traumwohnung/proxy-gateway-client-ts
 | `buildAndVerifyProxyUsername(set, minutes, meta)` | Encodes username and verifies it via `/api/verify`. Throws on failure. |
 | `buildProxyUsername(opts)` | Pure sync encoder — no verification. Accepts options object with `httpcloak`. |
 | `parseProxyUsername(username)` | Decode a username back to its components. |
-| `ProxyGatewayClient` | Raw API client: `listSessions`, `getSession`, `forceRotate`. |
+| `ProxyGatewayClient` | Raw API client: `listSessions`, `getSession`, `rotateNow`. |
 
 ### Usage
 

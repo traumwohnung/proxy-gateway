@@ -19,9 +19,9 @@ export const sessionInfoSchema = z.object({
     upstream: z.string(),
     /** Session creation time — never changes (ISO 8601 UTC). */
     created_at: z.string(),
-    /** When the current proxy assignment expires (ISO 8601 UTC). Reset on force_rotate. */
+    /** When the current proxy assignment expires (ISO 8601 UTC). Reset on rotate_now. */
     next_rotation_at: z.string(),
-    /** When the proxy was last assigned — equals created_at unless force_rotate was called (ISO 8601 UTC). */
+    /** When the proxy was last assigned — equals created_at unless rotate_now was called (ISO 8601 UTC). */
     last_rotation_at: z.string(),
     /** The decoded metadata object from the username JSON. Values are coerced to string. */
     metadata: z.record(z.string(), z.union([z.string(), z.number()]).transform(String)),

@@ -25,3 +25,6 @@ export {
 export { buildProxyUsername, parseProxyUsername } from "./types";
 // Configuration and verified username builder
 export { buildAndVerifyProxyUsername, configureProxy, type ProxyConfig } from "./configure";
+// Fluent proxy configuration & connection
+export { ProxyConfiguration } from "./proxy_configuration";
+export { ProxyClient } from "./proxy_client";

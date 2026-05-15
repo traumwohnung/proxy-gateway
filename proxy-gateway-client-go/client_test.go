@@ -30,7 +30,7 @@ func newTestServer(t *testing.T, sessions []proxygatewayclient.SessionInfo) *htt
 		json.NewEncoder(w).Encode(sessions[0])
 	})
 
-	mux.HandleFunc("POST /api/sessions/{username}/rotate", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/sessions/{username}/rotate-now", func(w http.ResponseWriter, r *http.Request) {
 		want := sessions[0].Username
 		if r.PathValue("username") != want {
 			http.Error(w, `{"error":"no active session"}`, http.StatusNotFound)
@@ -130,24 +130,24 @@ func TestGetSession(t *testing.T) {
 	}
 }
 
-func TestForceRotate(t *testing.T) {
+func TestRotateNow(t *testing.T) {
 	srv := newTestServer(t, []proxygatewayclient.SessionInfo{testSession})
 	defer srv.Close()
 
 	c := proxygatewayclient.New(proxygatewayclient.ClientOptions{BaseURL: srv.URL, APIKey: "test"})
 
-	got, err := c.ForceRotate(context.Background(), testSession.Username)
+	got, err := c.RotateNow(context.Background(), testSession.Username)
 	if err != nil {
-		t.Fatalf("ForceRotate: %v", err)
+		t.Fatalf("RotateNow: %v", err)
 	}
 	if got == nil {
 		t.Fatal("expected session after rotate, got nil")
 	}
 
 	// Non-existent username → nil, nil
-	missing, err := c.ForceRotate(context.Background(), "notexist")
+	missing, err := c.RotateNow(context.Background(), "notexist")
 	if err != nil {
-		t.Fatalf("ForceRotate (missing): %v", err)
+		t.Fatalf("RotateNow (missing): %v", err)
 	}
 	if missing != nil {
 		t.Error("expected nil for missing session")

@@ -343,7 +343,7 @@ func TestBuildProxysetRouterSupportsWebshare(t *testing.T) {
 	}
 }
 
-func TestForceRotateChangesSeed(t *testing.T) {
+func TestRotateNowChangesSeed(t *testing.T) {
 	var seeds []*proxykit.SessionSeed
 	source := proxykit.HandlerFunc(func(ctx context.Context, _ *proxykit.Request) (*proxykit.Result, error) {
 		seeds = append(seeds, proxykit.GetSessionSeed(ctx))
@@ -364,7 +364,7 @@ func TestForceRotateChangesSeed(t *testing.T) {
 	}
 	seedBefore := info.Seed
 
-	info2, err := sm.ForceRotate(seed)
+	info2, err := sm.RotateNow(seed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,9 +372,9 @@ func TestForceRotateChangesSeed(t *testing.T) {
 		t.Fatal("expected rotated session")
 	}
 	if info2.Seed == seedBefore {
-		t.Fatal("force rotate should produce a different seed")
+		t.Fatal("managed rotate should produce a different seed")
 	}
-	if info2.Rotation != 1 {
-		t.Fatalf("expected rotation=1, got %d", info2.Rotation)
+	if info2.Rotation == info.Rotation {
+		t.Fatalf("rotation did not change: still %d", info2.Rotation)
 	}
 }

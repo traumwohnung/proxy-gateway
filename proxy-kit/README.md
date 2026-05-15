@@ -255,10 +255,10 @@ It reads `utils.GetTopLevelSeed(ctx)` and `utils.GetSeedTTL(ctx)` from context a
 - **TTL > 0**: looks up its cache. On hit, returns the cached proxy. On miss, computes a `SessionSeed`, stores it in context, calls next, and caches the result.
 - **TTL = 0 or zero seed**: passes through with no seed (nil). Sources randomize.
 
-**Force rotation:**
+**Managed rotation:**
 
 ```go
-sm.ForceRotate(topLevelSeed)  // Bumps rotation counter → new seed → new proxy
+sm.RotateNow(topLevelSeed)  // Re-rolls rotation to a random uint64 → new seed → new proxy
 ```
 
 **Introspection:**

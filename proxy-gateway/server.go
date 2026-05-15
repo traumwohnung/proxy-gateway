@@ -105,7 +105,7 @@ func buildAdminServer(addr string, srv *Server, apiKey string) *http.Server {
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/sessions", bearerAuth(apiKey, handleListSessions(srv.Sessions)))
 		r.Get("/sessions/{username}", bearerAuth(apiKey, handleGetSession(srv.Sessions)))
-		r.Post("/sessions/{username}/rotate", bearerAuth(apiKey, handleForceRotate(srv.Sessions)))
+		r.Post("/sessions/{username}/rotate-now", bearerAuth(apiKey, handleRotateNow(srv.Sessions)))
 	})
 	return &http.Server{
 		Addr:              addr,

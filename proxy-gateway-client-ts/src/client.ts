@@ -60,18 +60,18 @@ export class ProxyGatewayClient {
     }
 
     /**
-     * Force-rotate the upstream proxy for an existing session.
+     * Re-roll the rotation for an existing session to a fresh random value.
      *
-     * Immediately reassigns the upstream proxy via least-used selection and
+     * The gateway picks a new upstream proxy under the same username and
      * resets the session TTL. The session ID, metadata, and duration are
-     * preserved. Use this to escape a bad or slow proxy without losing session
-     * continuity.
+     * preserved. Use this to escape a bad or slow proxy without losing
+     * session continuity.
      *
      * Returns null if no active session exists for this username.
      */
-    async forceRotate(username: string): Promise<SessionInfo | null> {
+    async rotateNow(username: string): Promise<SessionInfo | null> {
         try {
-            return await this.fetch<SessionInfo>(`/api/sessions/${encodeURIComponent(username)}/rotate`, {
+            return await this.fetch<SessionInfo>(`/api/sessions/${encodeURIComponent(username)}/rotate-now`, {
                 method: "POST",
             });
         } catch (err) {

@@ -88,7 +88,7 @@ func TestE2E_AdminAPI_NoSessionForZeroMinutes(t *testing.T) {
 	}
 }
 
-func TestE2E_AdminAPI_ForceRotate_ChangesUpstream(t *testing.T) {
+func TestE2E_AdminAPI_RotateNow_ChangesUpstream(t *testing.T) {
 	env := startTestEnv(t, 3, "")
 	defer env.cleanup()
 
@@ -101,12 +101,12 @@ func TestE2E_AdminAPI_ForceRotate_ChangesUpstream(t *testing.T) {
 	}
 	upstreamBefore := info.Upstream
 
-	rotated, err := env.client.ForceRotate(ctx(), username)
+	rotated, err := env.client.RotateNow(ctx(), username)
 	if err != nil {
-		t.Fatalf("ForceRotate: %v", err)
+		t.Fatalf("RotateNow: %v", err)
 	}
 	if rotated == nil {
-		t.Fatal("expected non-nil response from ForceRotate")
+		t.Fatal("expected non-nil response from RotateNow")
 	}
 	if rotated.LastRotationAt.IsZero() {
 		t.Error("last_rotation_at should be set after force rotate")
@@ -117,14 +117,14 @@ func TestE2E_AdminAPI_ForceRotate_ChangesUpstream(t *testing.T) {
 	t.Logf("upstream before=%s after=%s", upstreamBefore, rotated.Upstream)
 }
 
-func TestE2E_AdminAPI_ForceRotate_NonExistentReturnsNil(t *testing.T) {
+func TestE2E_AdminAPI_RotateNow_NonExistentReturnsNil(t *testing.T) {
 	env := startTestEnv(t, 1, "")
 	defer env.cleanup()
 
 	nonexistent := mustBuildUsername(t, "test", 30, map[string]any{"user": "ghost"})
-	result, err := env.client.ForceRotate(ctx(), nonexistent)
+	result, err := env.client.RotateNow(ctx(), nonexistent)
 	if err != nil {
-		t.Fatalf("ForceRotate on non-existent: %v", err)
+		t.Fatalf("RotateNow on non-existent: %v", err)
 	}
 	if result != nil {
 		t.Fatal("expected nil for non-existent session")

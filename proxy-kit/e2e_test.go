@@ -990,7 +990,7 @@ func TestE2E_Session_DifferentSeedsArePinnedIndependently(t *testing.T) {
 	}
 }
 
-func TestE2E_Session_ForceRotateChangesRotationCounter(t *testing.T) {
+func TestE2E_Session_RotateNowChangesRotation(t *testing.T) {
 	source := proxykit.HandlerFunc(func(ctx context.Context, _ *proxykit.Request) (*proxykit.Result, error) {
 		seed := proxykit.GetSessionSeed(ctx)
 		port := uint16(3000 + seed.Pick(1000))
@@ -1003,16 +1003,20 @@ func TestE2E_Session_ForceRotateChangesRotationCounter(t *testing.T) {
 	ctx = utils.WithSeedTTL(ctx, 5*time.Minute)
 
 	sm.Resolve(ctx, &proxykit.Request{}) //nolint:errcheck – establish session
+	before := sm.GetSession(topSeed)
+	if before == nil {
+		t.Fatal("initial session missing")
+	}
 
-	info, err := sm.ForceRotate(topSeed)
+	info, err := sm.RotateNow(topSeed)
 	if err != nil {
-		t.Fatalf("ForceRotate: %v", err)
+		t.Fatalf("RotateNow: %v", err)
 	}
 	if info == nil {
-		t.Fatal("ForceRotate returned nil")
+		t.Fatal("RotateNow returned nil")
 	}
-	if info.Rotation != 1 {
-		t.Fatalf("expected rotation=1, got %d", info.Rotation)
+	if info.Rotation == before.Rotation {
+		t.Fatalf("rotation did not change: still %d", info.Rotation)
 	}
 
 	// GetSession reflects the new rotation.
@@ -1020,8 +1024,8 @@ func TestE2E_Session_ForceRotateChangesRotationCounter(t *testing.T) {
 	if session == nil {
 		t.Fatal("session missing after rotate")
 	}
-	if session.Rotation != 1 {
-		t.Fatalf("GetSession rotation should be 1, got %d", session.Rotation)
+	if session.Rotation != info.Rotation {
+		t.Fatalf("GetSession rotation %d should match rotated %d", session.Rotation, info.Rotation)
 	}
 }
 

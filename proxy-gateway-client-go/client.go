@@ -25,9 +25,9 @@ type SessionInfo struct {
 	Upstream string `json:"upstream"`
 	// Session creation time — never changes.
 	CreatedAt time.Time `json:"created_at"`
-	// When the current proxy assignment expires. Reset on ForceRotate.
+	// When the current proxy assignment expires. Reset on RotateNow.
 	NextRotationAt time.Time `json:"next_rotation_at"`
-	// When the proxy was last assigned — equals CreatedAt unless ForceRotate was called.
+	// When the proxy was last assigned — equals CreatedAt unless RotateNow was called.
 	LastRotationAt time.Time `json:"last_rotation_at"`
 	// The decoded metadata object from the username JSON.
 	Metadata map[string]any `json:"metadata"`
@@ -197,12 +197,12 @@ func (c *Client) GetSession(ctx context.Context, username string) (*SessionInfo,
 	return &info, nil
 }
 
-// ForceRotate force-rotates the upstream proxy for an existing session.
-// It immediately reassigns the upstream proxy and resets the session TTL.
+// RotateNow re-rolls the rotation for an existing session to a fresh
+// random value. The gateway picks a new upstream proxy under the same
 // Returns nil, nil if no active session exists for that username.
-func (c *Client) ForceRotate(ctx context.Context, username string) (*SessionInfo, error) {
+func (c *Client) RotateNow(ctx context.Context, username string) (*SessionInfo, error) {
 	var info SessionInfo
-	path := "/api/sessions/" + url.PathEscape(username) + "/rotate"
+	path := "/api/sessions/" + url.PathEscape(username) + "/rotate-now"
 	err := c.post(ctx, path, &info)
 	if err != nil {
 		var apiErr *APIError

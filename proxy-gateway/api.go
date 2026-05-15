@@ -107,14 +107,14 @@ func handleGetSession(sessions *utils.SessionManager) http.HandlerFunc {
 	}
 }
 
-func handleForceRotate(sessions *utils.SessionManager) http.HandlerFunc {
+func handleRotateNow(sessions *utils.SessionManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		u, err := decodeBase64Username(chi.URLParam(r, "username"))
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, apiError{Error: "invalid username"})
 			return
 		}
-		info, err := sessions.ForceRotate(u.Affinity.Seed())
+		info, err := sessions.RotateNow(u.Affinity.Seed())
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, apiError{Error: err.Error()})
 			return
