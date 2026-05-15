@@ -1,17 +1,37 @@
 services:
   proxy-gateway:
-    image: ghcr.io/traumwohnung/proxy-gateway:main
-    # Or build locally:
-    # build:
-    #   context: ..
-    #   dockerfile: Dockerfile
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command: ["/data/config/config.toml"]
     ports:
       - "8100:8100"
       - "9000:9000"
     volumes:
       - ./config:/data/config:ro
     environment:
-      - LOG_LEVEL=info
+      - LOG_LEVEL=debug
+      - ANALYTICS_GRPC_ADDR=analytics:50051
+      - INGEST_TOKEN=${INGEST_TOKEN:-}
+    depends_on:
+      - analytics
+    restart: unless-stopped
+
+  analytics:
+    build:
+      context: ../analytics-service
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:4321:4321"
+      - "127.0.0.1:50051:50051"
+    volumes:
+      - analytics-data:/data
+    environment:
+      - ANALYTICS_DB_URL=file:/data/analytics.db
+      - INGEST_TOKEN=${INGEST_TOKEN:-}
+      - INGEST_PORT=50051
+      - DASHBOARD_PORT=4321
+      - DASHBOARD_HOST=0.0.0.0
     restart: unless-stopped
 
   tls-fingerprint-echo:
@@ -21,3 +41,6 @@ services:
     ports:
       - "8443:8443"
     restart: unless-stopped
+
+volumes:
+  analytics-data:

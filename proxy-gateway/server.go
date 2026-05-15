@@ -38,10 +38,7 @@ func RunServer(cfg *Config, srv *Server, apiKey string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Start usage flush loop if tracking is enabled.
-	if srv.Usage != nil {
-		go srv.Usage.Run(ctx)
-	}
+	_ = srv.Usage // tracker has no background loop; flushes per-connection on Close.
 
 	// --- Admin API (separate listener, optional) ---
 	if apiKey != "" && cfg.AdminAddr != "" {
@@ -109,9 +106,6 @@ func buildAdminServer(addr string, srv *Server, apiKey string) *http.Server {
 		r.Get("/sessions", bearerAuth(apiKey, handleListSessions(srv.Sessions)))
 		r.Get("/sessions/{username}", bearerAuth(apiKey, handleGetSession(srv.Sessions)))
 		r.Post("/sessions/{username}/rotate", bearerAuth(apiKey, handleForceRotate(srv.Sessions)))
-		if srv.Queries != nil {
-			r.Get("/usage", bearerAuth(apiKey, handleQueryUsage(srv.Queries)))
-		}
 	})
 	return &http.Server{
 		Addr:              addr,

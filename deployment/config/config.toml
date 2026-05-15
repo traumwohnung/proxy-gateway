@@ -1,35 +1,24 @@
 # Proxy Gateway — Production Configuration
-#
-# Clients use Proxy-Authorization with username format:
-#   <proxyset>-<minutes>-<sessionkey>
-#
-# Examples:
-#   curl -x http://proxy-gateway:8100 --proxy-user "residential-5-abc123:" https://...
-#   curl -x http://proxy-gateway:8100 --proxy-user "datacenter-0-req1:" https://...
-#
-# - proxyset: alphanumeric name matching a proxy set below
-# - minutes: 0 (new IP every request) to 1440 (24h sticky session)
-# - sessionkey: alphanumeric session identifier
 
 bind_addr  = "0.0.0.0:8100"
 admin_addr = "0.0.0.0:9000"
-log_level  = "info"
+log_level  = "debug"
 
-# MITM CA for httpcloak TLS fingerprint spoofing.
-# Paths are relative to the config directory.
 mitm_ca_cert = "mitm-ca.crt"
 mitm_ca_key  = "mitm-ca.key"
 
 [[proxy_set]]
 name = "residential"
-source_type = "static_file"
-
-[proxy_set.source]
+provider = "static_file"
+[proxy_set.static_file]
 proxies_file = "residential.txt"
 
 [[proxy_set]]
 name = "datacenter"
-source_type = "static_file"
-
-[proxy_set.source]
+provider = "static_file"
+[proxy_set.static_file]
 proxies_file = "datacenter.txt"
+
+[[proxy_set]]
+name = "direct"
+provider = "none"

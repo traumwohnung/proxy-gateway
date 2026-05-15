@@ -1,0 +1,8 @@
+---
+import Base from '../layouts/Base.astro';
+import Dashboard from '../components/Dashboard.tsx';
+---
+<Base title="Usage">
+  <h1 class="text-2xl font-semibold mb-6">Usage</h1>
+  <Dashboard client:only="react" />
+</Base>

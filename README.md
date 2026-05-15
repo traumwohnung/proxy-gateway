@@ -41,6 +41,7 @@ Client ──CONNECT──→ proxy-gateway ──TLS termination──→ httpc
 - **Session affinity** — pin a session to the same upstream proxy for a configurable duration (0–1440 minutes), encoded in the username.
 - **Per-proxy credentials** — each proxy entry includes its own username:password.
 - **REST admin API** — inspect active sessions and force-rotate sessions (separate `admin_addr`).
+- **Usage analytics** — per-hour upload/download byte buckets streamed over gRPC to the standalone [`analytics-service`](analytics-service/) (libSQL + Astro dashboard).
 
 ## Configuration
 
@@ -151,6 +152,8 @@ Direct connections to the target — no upstream proxy. Useful when you only wan
 | `API_KEY` | Bearer token for the admin API. If unset, the admin server is not started even if `admin_addr` is set. |
 | `PROXY_PASSWORD` | If set, clients must supply this as their proxy password. |
 | `PROXY_MITM_INSECURE_UPSTREAM` | Set to `true` to skip upstream TLS cert verification in MITM mode (testing only). |
+| `ANALYTICS_GRPC_ADDR` | Address of the [`analytics-service`](analytics-service/) ingest gRPC endpoint (e.g. `analytics:50051`). When unset, usage tracking is disabled. |
+| `INGEST_TOKEN` | Bearer token sent on the analytics gRPC stream. Must match the token configured on analytics-service. |
 
 ## Username format
 
@@ -262,6 +265,11 @@ Force-rotate the upstream proxy for an existing session. Picks a new upstream, r
 curl -X POST -H "Authorization: Bearer mysecretkey" \
   http://127.0.0.1:9000/api/sessions/eyJzZXQiOiJyZXNpZGVudGlhbCIs.../rotate
 ```
+
+> **Note:** The `/api/usage` endpoint was removed. Usage data now lives in
+> [`analytics-service`](analytics-service/) — query and visualize it through
+> the analytics dashboard. The gateway pushes deltas to analytics over gRPC
+> and never persists usage itself.
 
 ## TypeScript client
 

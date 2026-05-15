@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package ingest.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "proxy-gateway/analytics/gen/ingest/v1;ingestv1";
+
+// Ingest is the write-only API the proxy-gateway uses to push usage data.
+service Ingest {
+  // RecordUsage streams one UsageDelta per closed connection.
+  rpc RecordUsage(stream UsageDelta) returns (RecordUsageAck) {}
+}
+
+message UsageDelta {
+  // Wall-clock timestamp when the connection closed.
+  google.protobuf.Timestamp timestamp = 1;
+  string proxyset = 2;
+  // Canonical JSON encoding of the session parameters (formerly affinity).
+  string session_params = 3;
+  // Configured session duration in minutes (0 = no affinity, 1..1440 = sticky).
+  int32 session_duration_minutes = 4;
+  int64 upload_bytes = 5;
+  int64 download_bytes = 6;
+}
+
+message RecordUsageAck {}

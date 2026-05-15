@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"path/filepath"
 
-	db "proxy-gateway/db/gen"
 	proxykit "proxy-kit"
 	"proxy-kit/utils"
 )
@@ -17,11 +16,10 @@ type Server struct {
 	Pipeline proxykit.Handler
 	Sessions *utils.SessionManager
 	Usage    *UsageTracker
-	Queries  *db.Queries // nil when DATABASE_URL is unset
 }
 
 // BuildServer assembles the full handler pipeline from config.
-func BuildServer(cfg *Config, configDir string, proxyPassword string, tracker *UsageTracker, queries *db.Queries) (*Server, error) {
+func BuildServer(cfg *Config, configDir string, proxyPassword string, tracker *UsageTracker) (*Server, error) {
 	router, err := buildProxysetRouter(cfg, configDir)
 	if err != nil {
 		return nil, err
@@ -42,7 +40,6 @@ func BuildServer(cfg *Config, configDir string, proxyPassword string, tracker *U
 		Pipeline: pipeline,
 		Sessions: sessions,
 		Usage:    tracker,
-		Queries:  queries,
 	}, nil
 }
 
@@ -132,9 +129,10 @@ func trackUsage(tracker *UsageTracker, next proxykit.Handler) proxykit.Handler {
 			return result, err
 		}
 		ct := &usageConnTracker{
-			tracker:        tracker,
-			proxyset:       getSet(ctx),
-			affinityParams: getAffinityJSON(ctx),
+			tracker:       tracker,
+			proxyset:      getSet(ctx),
+			sessionParams: getAffinityJSON(ctx),
+			minutes:       getMinutes(ctx),
 		}
 		result.ConnTracker = proxykit.ChainTrackers(result.ConnTracker, ct)
 		return result, nil

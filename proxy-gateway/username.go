@@ -71,7 +71,17 @@ const (
 	ctxSet ctxKey = iota
 	ctxAffinityJSON
 	ctxHTTPCloakPreset
+	ctxMinutes
 )
+
+func withMinutes(ctx context.Context, m int) context.Context {
+	return context.WithValue(ctx, ctxMinutes, m)
+}
+
+func getMinutes(ctx context.Context) int {
+	v, _ := ctx.Value(ctxMinutes).(int)
+	return v
+}
 
 func withSet(ctx context.Context, set string) context.Context {
 	return context.WithValue(ctx, ctxSet, set)
@@ -118,6 +128,7 @@ func ParseJSONCreds(next proxykit.Handler) proxykit.Handler {
 
 		ctx = withSet(ctx, u.Affinity.Set)
 		ctx = withAffinityJSON(ctx, u.Affinity.CanonicalJSON())
+		ctx = withMinutes(ctx, u.Minutes)
 		ctx = utils.WithSeedTTL(ctx, time.Duration(u.Minutes)*time.Minute)
 		ctx = utils.WithTopLevelSeed(ctx, u.Affinity.Seed())
 		ctx = utils.WithSessionLabel(ctx, u.Raw)

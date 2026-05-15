@@ -1,14 +1,11 @@
 package main
 
 import (
-	"context"
 	"log/slog"
 	"os"
 	"path/filepath"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
-	db "proxy-gateway/db/gen"
+	"proxy-gateway/analytics"
 )
 
 func main() {
@@ -25,8 +22,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Config file's log_level applies only when no LOG_LEVEL env var was set.
-	// Env var wins so operators can flip debug on/off without editing config.
 	if os.Getenv("LOG_LEVEL") == "" && cfg.LogLevel != "" {
 		initLogging(cfg.LogLevel)
 	}
@@ -36,23 +31,22 @@ func main() {
 		configDir = "."
 	}
 
-	// --- Database (optional) ---
+	// --- Analytics (optional) ---
 	var tracker *UsageTracker
-	var queries *db.Queries
-	if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
-		pool, err := pgxpool.New(context.Background(), dsn)
+	if addr := os.Getenv("ANALYTICS_GRPC_ADDR"); addr != "" {
+		client, err := analytics.Dial(addr, os.Getenv("INGEST_TOKEN"))
 		if err != nil {
-			slog.Error("failed to connect to database", "err", err)
+			slog.Error("failed to dial analytics service", "err", err)
 			os.Exit(1)
 		}
-		queries = db.New(pool)
-		tracker = NewUsageTracker(queries)
-		slog.Info("usage tracking enabled")
+		tracker = NewUsageTracker(client)
+		slog.Info("usage tracking enabled", "analytics_addr", addr)
+		defer client.Close() //nolint:errcheck
 	} else {
-		slog.Info("DATABASE_URL not set, usage tracking disabled")
+		slog.Info("ANALYTICS_GRPC_ADDR not set, usage tracking disabled")
 	}
 
-	srv, err := BuildServer(cfg, configDir, os.Getenv("PROXY_PASSWORD"), tracker, queries)
+	srv, err := BuildServer(cfg, configDir, os.Getenv("PROXY_PASSWORD"), tracker)
 	if err != nil {
 		slog.Error("failed to build server", "err", err)
 		os.Exit(1)
