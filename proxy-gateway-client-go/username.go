@@ -8,6 +8,10 @@ import (
 )
 
 // UsernameParams holds the decoded components of a proxy-gateway username.
+//
+// MITM mode is opt-in via the MITM flag (or implicitly by setting HTTPCloak
+// or Scripts). When MITM is enabled but HTTPCloak is nil, the gateway
+// defaults to the chrome-latest preset.
 type UsernameParams struct {
 	// Set is the proxy set name — must match a [[proxy_set]] name in the server config.
 	Set string `json:"set"`
@@ -23,10 +27,190 @@ type UsernameParams struct {
 	// + different SessionMeta = same upstream IP. Carried through to the
 	// analytics service for filtering/grouping (tenant, campaign, request_id, …).
 	SessionMeta map[string]any `json:"session_meta,omitempty"`
-	// HTTPCloak enables TLS fingerprint spoofing via MITM. When set, the
-	// proxy-gateway intercepts the TLS connection and re-establishes it with
-	// a browser-like fingerprint.
+	// MITM toggles MITM mode. Marshaled as the presence of the `mitm` wire
+	// object. Setting HTTPCloak or Scripts implicitly enables MITM as well.
+	MITM bool `json:"-"`
+	// HTTPCloak enables TLS fingerprint spoofing. Wire form lives under
+	// `mitm.httpcloak`. Setting this implies MITM is on.
+	HTTPCloak *HTTPCloakSpec `json:"-"`
+	// Scripts is the ordered chain of Starlark scripts evaluated server-side
+	// on this request's MITM'd response. Each entry is either a reference
+	// to a named [[script]] declared in the gateway's config.toml, or an
+	// inline source. Wire form lives under `mitm.scripts`. Setting this
+	// implies MITM is on.
+	//
+	// See the gateway's SCRIPTS.md for the full guide.
+	Scripts []ScriptEntry `json:"-"`
+}
+
+// mitmWire is the on-wire `mitm` object embedded inside a username payload.
+type mitmWire struct {
 	HTTPCloak *HTTPCloakSpec `json:"httpcloak,omitempty"`
+	Scripts   []ScriptEntry  `json:"scripts,omitempty"`
+}
+
+// usernameWire mirrors UsernameParams' on-wire shape, with `mitm` scoped
+// around httpcloak + scripts.
+type usernameWire struct {
+	Set           string         `json:"set"`
+	Minutes       int            `json:"minutes,omitempty"`
+	SessionParams map[string]any `json:"session_params,omitempty"`
+	SessionMeta   map[string]any `json:"session_meta,omitempty"`
+	MITM          *mitmWire      `json:"mitm,omitempty"`
+}
+
+// MarshalJSON emits the wire form, scoping httpcloak + scripts inside `mitm`.
+// `mitm` is emitted whenever the configuration enables MITM in any way —
+// either explicitly via MITM=true, or implicitly by carrying a non-nil
+// HTTPCloak or a non-empty Scripts slice.
+func (p UsernameParams) MarshalJSON() ([]byte, error) {
+	w := usernameWire{
+		Set:           p.Set,
+		Minutes:       p.Minutes,
+		SessionParams: p.SessionParams,
+		SessionMeta:   p.SessionMeta,
+	}
+	if p.MITM || p.HTTPCloak != nil || len(p.Scripts) > 0 {
+		w.MITM = &mitmWire{HTTPCloak: p.HTTPCloak, Scripts: p.Scripts}
+	}
+	return json.Marshal(w)
+}
+
+// UnmarshalJSON reads the wire form. Presence of `mitm` toggles MITM=true.
+// Top-level `httpcloak`/`scripts` keys are rejected to match the gateway.
+func (p *UsernameParams) UnmarshalJSON(data []byte) error {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(data, &top); err != nil {
+		return err
+	}
+	if _, ok := top["httpcloak"]; ok {
+		return errors.New("top-level 'httpcloak' is no longer accepted — move it inside the 'mitm' object")
+	}
+	if _, ok := top["scripts"]; ok {
+		return errors.New("top-level 'scripts' is no longer accepted — move it inside the 'mitm' object")
+	}
+	var w usernameWire
+	if err := json.Unmarshal(data, &w); err != nil {
+		return err
+	}
+	*p = UsernameParams{
+		Set:           w.Set,
+		Minutes:       w.Minutes,
+		SessionParams: w.SessionParams,
+		SessionMeta:   w.SessionMeta,
+	}
+	if w.MITM != nil {
+		p.MITM = true
+		p.HTTPCloak = w.MITM.HTTPCloak
+		p.Scripts = w.MITM.Scripts
+	}
+	return nil
+}
+
+// ScriptEntry is one entry in a username's `scripts` chain. Wire form is a
+// tagged discriminated union with `kind` as the discriminator:
+//
+//   - {"kind": "ref",    "name":   "antibot"}
+//   - {"kind": "source", "source": "def response_bailing(r): pass"}
+//
+// On the gateway-side username parser a bare string is also accepted as
+// shorthand for {kind:"ref", name:<string>}; this SDK always emits the
+// tagged form for clarity.
+//
+// Use ScriptRef / ScriptSource constructors rather than building this
+// struct by hand.
+type ScriptEntry struct {
+	Kind   ScriptEntryKind `json:"kind"`
+	Name   string          `json:"name,omitempty"`
+	Source string          `json:"source,omitempty"`
+}
+
+// ScriptEntryKind is the discriminator field on a ScriptEntry.
+type ScriptEntryKind string
+
+const (
+	// ScriptEntryKindRef references a named [[script]] on the gateway.
+	ScriptEntryKindRef ScriptEntryKind = "ref"
+	// ScriptEntryKindSource carries inline Starlark source.
+	ScriptEntryKindSource ScriptEntryKind = "source"
+)
+
+// MarshalJSON emits the wire form and validates internal consistency.
+func (e ScriptEntry) MarshalJSON() ([]byte, error) {
+	switch e.Kind {
+	case ScriptEntryKindRef:
+		if e.Name == "" {
+			return nil, errors.New("ScriptEntry: kind=ref requires Name")
+		}
+		if e.Source != "" {
+			return nil, errors.New("ScriptEntry: kind=ref must not carry Source")
+		}
+		return json.Marshal(struct {
+			Kind ScriptEntryKind `json:"kind"`
+			Name string          `json:"name"`
+		}{e.Kind, e.Name})
+	case ScriptEntryKindSource:
+		if e.Source == "" {
+			return nil, errors.New("ScriptEntry: kind=source requires Source")
+		}
+		if e.Name != "" {
+			return nil, errors.New("ScriptEntry: kind=source must not carry Name")
+		}
+		return json.Marshal(struct {
+			Kind   ScriptEntryKind `json:"kind"`
+			Source string          `json:"source"`
+		}{e.Kind, e.Source})
+	default:
+		return nil, fmt.Errorf("ScriptEntry: invalid Kind %q (expected %q or %q)",
+			e.Kind, ScriptEntryKindRef, ScriptEntryKindSource)
+	}
+}
+
+// UnmarshalJSON accepts a bare string ("name", shorthand for ref-by-name)
+// or the tagged object form.
+func (e *ScriptEntry) UnmarshalJSON(data []byte) error {
+	if len(data) > 0 && data[0] == '"' {
+		var s string
+		if err := json.Unmarshal(data, &s); err != nil {
+			return err
+		}
+		e.Kind = ScriptEntryKindRef
+		e.Name = s
+		return nil
+	}
+	var obj struct {
+		Kind   ScriptEntryKind `json:"kind"`
+		Name   string          `json:"name"`
+		Source string          `json:"source"`
+	}
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return err
+	}
+	switch obj.Kind {
+	case ScriptEntryKindRef:
+		if obj.Name == "" {
+			return errors.New("ScriptEntry: kind=ref requires non-empty 'name'")
+		}
+		*e = ScriptEntry{Kind: ScriptEntryKindRef, Name: obj.Name}
+	case ScriptEntryKindSource:
+		if obj.Source == "" {
+			return errors.New("ScriptEntry: kind=source requires non-empty 'source'")
+		}
+		*e = ScriptEntry{Kind: ScriptEntryKindSource, Source: obj.Source}
+	case "":
+		return errors.New("ScriptEntry: missing 'kind' discriminator (expected \"ref\" or \"source\")")
+	default:
+		return fmt.Errorf("ScriptEntry: unknown kind %q (expected \"ref\" or \"source\")", obj.Kind)
+	}
+	return nil
+}
+
+// ScriptRef builds a ScriptEntry referencing a named server-side script.
+func ScriptRef(name string) ScriptEntry { return ScriptEntry{Kind: ScriptEntryKindRef, Name: name} }
+
+// ScriptSource builds a ScriptEntry with inline Starlark source.
+func ScriptSource(src string) ScriptEntry {
+	return ScriptEntry{Kind: ScriptEntryKindSource, Source: src}
 }
 
 // HTTPCloakSpec configures TLS fingerprint spoofing.

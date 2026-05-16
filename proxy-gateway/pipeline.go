@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"path/filepath"
 	"time"
 
@@ -41,8 +42,8 @@ func BuildServer(cfg *Config, configDir string, proxyPassword string, tracker *U
 		return nil, err
 	}
 
-	conditionalMITM := utils.ConditionalFingerprintMITM(ca, getHTTPCloakSpec, inner)
-	pipeline := PasswordAuth(proxyPassword, ParseJSONCreds(conditionalMITM))
+	conditionalMITM := utils.ConditionalMITM(ca, getHTTPCloakSpec, inner)
+	pipeline := PasswordAuth(proxyPassword, ParseJSONCreds(cfg.Registry(), conditionalMITM))
 
 	return &Server{
 		Pipeline: pipeline,
@@ -118,7 +119,24 @@ func buildProxysetRouter(cfg *Config, configDir string) (proxykit.Handler, error
 		baseSrc := src
 		sources[raw.Name] = proxykit.HandlerFunc(func(ctx context.Context, req *proxykit.Request) (*proxykit.Result, error) {
 			ctx = utils.WithProviderName(ctx, provider)
-			return baseSrc.Resolve(ctx, req)
+			result, err := baseSrc.Resolve(ctx, req)
+			if err != nil || result == nil {
+				return result, err
+			}
+			// Install a response hook only when the username's
+			// `mitm.scripts` array contributed at least one script.
+			chain := getScripts(ctx)
+			if len(chain) > 0 {
+				prev := result.ResponseHook
+				hookCtx := ctx
+				result.ResponseHook = func(resp *http.Response) *http.Response {
+					if prev != nil {
+						resp = prev(resp)
+					}
+					return ApplyResponseBailing(hookCtx, chain, resp, 0, 0)
+				}
+			}
+			return result, nil
 		})
 	}
 

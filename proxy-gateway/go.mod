@@ -5,6 +5,7 @@ go 1.26.1
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/go-chi/chi/v5 v5.2.5
+	go.starlark.net v0.0.0-20260326113308-fadfc96def35
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
@@ -13,6 +14,9 @@ require (
 
 require (
 	github.com/andybalholm/brotli v1.2.0 // indirect
+	github.com/antchfx/htmlquery v1.3.6 // indirect
+	github.com/antchfx/xpath v1.3.6 // indirect
+	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/hashicorp/golang-lru v1.0.2 // indirect
 	github.com/klauspost/compress v1.18.5 // indirect
 	github.com/miekg/dns v1.1.72 // indirect

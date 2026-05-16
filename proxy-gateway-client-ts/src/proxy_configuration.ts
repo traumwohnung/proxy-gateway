@@ -1,5 +1,6 @@
 import { ProxyClient } from "./proxy_client";
-import type { HTTPCloakSpec, SessionInfo, SessionMeta, SessionParams } from "./types";
+import { scriptRef, scriptSource } from "./types";
+import type { HTTPCloakSpec, ScriptEntry, SessionInfo, SessionMeta, SessionParams } from "./types";
 
 /**
  * Fluent builder for a single proxy-gateway proxy configuration. From it
@@ -21,18 +22,21 @@ export class ProxyConfiguration {
         minutes: number;
         sessionParams: SessionParams;
         sessionMeta: SessionMeta;
+        mitm: boolean;
         httpcloak?: HTTPCloakSpec;
+        scripts: ScriptEntry[];
     };
     private client: ProxyClient | null = null;
 
     constructor(set: string) {
-        this.params = { set, minutes: 0, sessionParams: {}, sessionMeta: {} };
+        this.params = { set, minutes: 0, sessionParams: {}, sessionMeta: {}, mitm: false, scripts: [] };
     }
 
     /**
-     * Returns a deep copy of this configuration. The session_params and
-     * session_meta maps are copied so further mutations on the clone do not
-     * affect the original. The bound `ProxyClient` reference is shared.
+     * Returns a deep copy of this configuration. The session_params,
+     * session_meta, and scripts collections are copied so further mutations on
+     * the clone do not affect the original. The bound `ProxyClient` reference
+     * is shared.
      */
     clone(): ProxyConfiguration {
         const cp = new ProxyConfiguration(this.params.set);
@@ -41,7 +45,9 @@ export class ProxyConfiguration {
             minutes: this.params.minutes,
             sessionParams: { ...this.params.sessionParams },
             sessionMeta: { ...this.params.sessionMeta },
+            mitm: this.params.mitm,
             httpcloak: this.params.httpcloak,
+            scripts: [...this.params.scripts],
         };
         cp.client = this.client;
         return cp;
@@ -71,8 +77,61 @@ export class ProxyConfiguration {
         return this;
     }
 
+    /**
+     * Enable MITM mode with default settings (chrome-latest httpcloak,
+     * no scripts). `httpcloak()` and `scripts()` enable MITM implicitly;
+     * this method is the explicit form for the "plain default MITM" case.
+     */
+    mitm(): this {
+        this.params.mitm = true;
+        return this;
+    }
+
+    /**
+     * Disable MITM and drop any previously configured `httpcloak` and
+     * `scripts`. Use to revert a cloned configuration back to tunnel mode.
+     */
+    noMitm(): this {
+        this.params.mitm = false;
+        this.params.httpcloak = undefined;
+        this.params.scripts = [];
+        return this;
+    }
+
+    /** Set the TLS fingerprint spoofing spec. Enables MITM implicitly. */
     httpcloak(spec: HTTPCloakSpec): this {
         this.params.httpcloak = spec;
+        this.params.mitm = true;
+        return this;
+    }
+
+    /**
+     * Append entries to the ordered chain of Starlark scripts evaluated
+     * server-side on the MITM'd response. Enables MITM implicitly. Bare
+     * strings are treated as `{ kind: "ref", name }`.
+     *
+     * @example
+     * cfg.scripts("antibot", { kind: "source", source: "def response_bailing(r): return None" });
+     */
+    scripts(...entries: (string | ScriptEntry)[]): this {
+        for (const e of entries) {
+            this.params.scripts.push(typeof e === "string" ? scriptRef(e) : e);
+        }
+        this.params.mitm = true;
+        return this;
+    }
+
+    /** Convenience for `cfg.scripts(scriptRef(name))`. */
+    scriptRef(name: string): this {
+        this.params.scripts.push(scriptRef(name));
+        this.params.mitm = true;
+        return this;
+    }
+
+    /** Convenience for `cfg.scripts(scriptSource(src))`. */
+    scriptSource(src: string): this {
+        this.params.scripts.push(scriptSource(src));
+        this.params.mitm = true;
         return this;
     }
 
@@ -94,8 +153,16 @@ export class ProxyConfiguration {
         if (Object.keys(this.params.sessionMeta).length > 0) {
             payload.session_meta = this.params.sessionMeta;
         }
-        if (this.params.httpcloak !== undefined) {
-            payload.httpcloak = this.params.httpcloak;
+        const mitmOn = this.params.mitm || this.params.httpcloak !== undefined || this.params.scripts.length > 0;
+        if (mitmOn) {
+            const mitm: Record<string, unknown> = {};
+            if (this.params.httpcloak !== undefined) {
+                mitm.httpcloak = this.params.httpcloak;
+            }
+            if (this.params.scripts.length > 0) {
+                mitm.scripts = this.params.scripts;
+            }
+            payload.mitm = mitm;
         }
         return btoa(JSON.stringify(payload));
     }

@@ -80,7 +80,10 @@ Closure returns `(value, ok)`. `ok=false` → configuration rotates, closure run
 | `.Minutes(n)` | Session duration (0 = per-request, 1–1440 = sticky) |
 | `.SessionParams(k, v)` | Add a key/value to session_params (drives upstream IP) |
 | `.SessionMeta(k, v)` | Add a key/value to session_meta (informational, for analytics) |
-| `.HTTPCloak(spec)` | Enable TLS fingerprint spoofing |
+| `.MITM()` | Enable MITM mode with default chrome-latest httpcloak |
+| `.HTTPCloak(spec)` | Set TLS fingerprint spec (implies MITM) |
+| `.Scripts(entries…)` / `.ScriptRef(name)` / `.ScriptSource(src)` | Append to the script chain (implies MITM) |
+| `.NoMITM()` | Disable MITM and drop any httpcloak/scripts |
 | `.WithProxyClient(c)` | Attach gateway connection (required for URL/HTTPClient/Rotate) |
 | `.Clone()` | Deep-copy (session_params + session_meta copied, client pointer shared) |
 | `.BuildUsername()` / `.MustBuildUsername()` | Encode the current config to base64 |

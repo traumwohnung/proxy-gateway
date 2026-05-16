@@ -717,25 +717,28 @@ func proxyToURL(proxy *proxykit.Proxy) string {
 }
 
 // ---------------------------------------------------------------------------
-// ConditionalFingerprintMITM
+// ConditionalMITM
 // ---------------------------------------------------------------------------
 
-// ConditionalFingerprintMITM returns a Handler that activates MITM + httpcloak
+// ConditionalMITM returns a Handler that activates MITM + httpcloak
 // fingerprint spoofing only when getSpec returns a non-nil, non-zero spec.
 // When getSpec returns nil the request is forwarded unchanged through inner.
 //
 // getSpec is typically wired to a context getter set by credential-parsing
-// middleware (e.g. getHTTPCloakSpec from proxy-gateway's username.go).
+// middleware (e.g. getHTTPCloakSpec from proxy-gateway's username.go). The
+// gateway synthesises a default chrome-latest spec for usernames whose
+// `mitm` object is empty so MITM mode is fully expressed by the presence of
+// the spec.
 //
 // The CA certificate is used to forge per-host TLS certificates for MITM.
 // All forged certificates share a single cert cache for efficiency.
 //
 // Set PROXY_MITM_INSECURE_UPSTREAM=true to skip upstream TLS cert verification
 // (useful when testing against servers with self-signed certificates).
-func ConditionalFingerprintMITM(ca tls.Certificate, getSpec func(context.Context) *HTTPCloakSpec, inner proxykit.Handler) proxykit.Handler {
+func ConditionalMITM(ca tls.Certificate, getSpec func(context.Context) *HTTPCloakSpec, inner proxykit.Handler) proxykit.Handler {
 	certs, err := proxykit.NewForgedCertProvider(ca)
 	if err != nil {
-		panic(fmt.Sprintf("ConditionalFingerprintMITM: %v", err))
+		panic(fmt.Sprintf("ConditionalMITM: %v", err))
 	}
 	insecure := os.Getenv("PROXY_MITM_INSECURE_UPSTREAM") == "true"
 	return &conditionalMITMHandler{

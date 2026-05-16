@@ -58,6 +58,9 @@ func (b *ProxyConfiguration) Clone() *ProxyConfiguration {
 			cp.params.SessionMeta[k] = v
 		}
 	}
+	if b.params.Scripts != nil {
+		cp.params.Scripts = append([]ScriptEntry(nil), b.params.Scripts...)
+	}
 	return cp
 }
 
@@ -90,10 +93,54 @@ func (b *ProxyConfiguration) SessionMeta(key string, value any) *ProxyConfigurat
 	return b
 }
 
-// HTTPCloak enables TLS fingerprint spoofing.
+// MITM enables MITM mode with default settings (chrome-latest httpcloak
+// fingerprint, no scripts). Calling HTTPCloak or Scripts implicitly enables
+// MITM as well — this method is the explicit form for the "plain default
+// MITM" case.
+func (b *ProxyConfiguration) MITM() *ProxyConfiguration {
+	b.params.MITM = true
+	return b
+}
+
+// NoMITM disables MITM and drops any previously configured HTTPCloak spec
+// and Scripts chain together. Use it to revert a cloned configuration back
+// to tunnel mode.
+func (b *ProxyConfiguration) NoMITM() *ProxyConfiguration {
+	b.params.MITM = false
+	b.params.HTTPCloak = nil
+	b.params.Scripts = nil
+	return b
+}
+
+// HTTPCloak sets the TLS fingerprint spoofing spec and enables MITM.
 func (b *ProxyConfiguration) HTTPCloak(spec *HTTPCloakSpec) *ProxyConfiguration {
 	b.params.HTTPCloak = spec
+	b.params.MITM = true
 	return b
+}
+
+// Scripts appends to the ordered chain of Starlark scripts evaluated on
+// the MITM'd response. Implicitly enables MITM. Entries are kept in the
+// order added. Use ScriptRef or ScriptSource to construct entries:
+//
+//	cfg.Scripts(
+//	    proxygatewayclient.ScriptRef("antibot"),
+//	    proxygatewayclient.ScriptSource(`def response_bailing(r): return "x" if r.scan(b"BLOCK") >= 0 else None`),
+//	)
+func (b *ProxyConfiguration) Scripts(entries ...ScriptEntry) *ProxyConfiguration {
+	b.params.Scripts = append(b.params.Scripts, entries...)
+	b.params.MITM = true
+	return b
+}
+
+// ScriptRef is a convenience for cfg.Scripts(ScriptRef(name)).
+func (b *ProxyConfiguration) ScriptRef(name string) *ProxyConfiguration {
+	return b.Scripts(ScriptRef(name))
+}
+
+// ScriptSource is a convenience for cfg.Scripts(ScriptSource(src)).
+func (b *ProxyConfiguration) ScriptSource(src string) *ProxyConfiguration {
+	return b.Scripts(ScriptSource(src))
 }
 
 // WithProxyClient attaches the gateway connection (proxy endpoint and

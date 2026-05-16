@@ -154,7 +154,7 @@ func TestE2E_HTTPCloak_TLSFingerprintEcho(t *testing.T) {
 
 	for _, preset := range presets {
 		t.Run(preset, func(t *testing.T) {
-			usernameJSON := fmt.Sprintf(`{"set":"direct","httpcloak":%q}`, preset)
+			usernameJSON := fmt.Sprintf(`{"set":"direct","mitm":{"httpcloak":%q}}`, preset)
 			username := base64.StdEncoding.EncodeToString([]byte(usernameJSON))
 
 			proxyRawURL := "http://" + gatewayHTTPAddr

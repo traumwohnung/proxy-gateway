@@ -168,23 +168,25 @@ The `Proxy-Authorization` username is a **JSON object** encoded as base64:
 | `set` | string | Proxy set name — must match a `[[proxy_set]] name` in config |
 | `minutes` | integer 0–1440 | Affinity duration. `0` = new proxy every request, `1440` = 24 h sticky |
 | `affinity` | object | Arbitrary key/value pairs that identify the session (used for affinity key) |
-| `httpcloak` | object | TLS fingerprint spoofing config (optional, see below) |
+| `mitm` | object | MITM mode opt-in. Presence enables MITM; see below |
 
 The base64-encoded JSON string is the affinity key — identical inputs always map to the same session for the duration of `minutes`.
 
-### HTTPCloak (TLS fingerprint spoofing)
+### MITM (TLS fingerprint spoofing + scripts)
 
-When the `httpcloak` field is present, the proxy-gateway activates MITM mode: it terminates the client's TLS, then re-establishes the upstream connection with a browser-like TLS fingerprint.
+MITM is opt-in via a `mitm` object on the username. Presence of `mitm` causes the proxy-gateway to terminate the client's TLS and re-establish the upstream connection with a browser-like TLS fingerprint. An empty `mitm: {}` enables MITM with the default `chrome-latest` httpcloak preset; `mitm.httpcloak` overrides the spec; `mitm.scripts` attaches a Starlark response-bailing chain (see [SCRIPTS.md](./SCRIPTS.md)). Top-level `httpcloak` and `scripts` keys are rejected.
 
 ```json
 {
   "set": "direct",
   "minutes": 60,
   "affinity": {},
-  "httpcloak": {
-    "preset": "chrome-latest",
-    "user_agent": "preset",
-    "ech": true
+  "mitm": {
+    "httpcloak": {
+      "preset": "chrome-latest",
+      "user_agent": "preset",
+      "ech": true
+    }
   }
 }
 ```
@@ -212,7 +214,7 @@ USERNAME=$(echo -n '{"set":"residential","minutes":60,"affinity":{"user":"alice"
 curl -x http://127.0.0.1:8100 --proxy-user "$USERNAME:x" https://httpbin.org/ip
 
 # With TLS fingerprint spoofing (Chrome)
-USERNAME=$(echo -n '{"set":"direct","minutes":0,"affinity":{},"httpcloak":{"preset":"chrome-latest"}}' | base64)
+USERNAME=$(echo -n '{"set":"direct","minutes":0,"affinity":{},"mitm":{"httpcloak":"chrome-latest"}}' | base64)
 curl -x http://127.0.0.1:8100 --proxy-user "$USERNAME:x" -k https://httpbin.org/ip
 
 # SOCKS5

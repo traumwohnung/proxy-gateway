@@ -71,27 +71,67 @@ export type VerifyResult = z.infer<typeof verifyResultSchema>;
  * Configures TLS fingerprint spoofing via MITM.
  * For simple cases, pass a preset name string (e.g. "chrome-latest") instead.
  */
-export interface HTTPCloakSpec {
+export const httpCloakSpecSchema = z.object({
     /** Browser fingerprint preset (e.g. "chrome-latest", "firefox-latest"). */
-    preset: string;
+    preset: z.string(),
     /** User-Agent handling: "ignore" (default), "preset", or "check". */
-    user_agent?: "ignore" | "preset" | "check";
+    user_agent: z.enum(["ignore", "preset", "check"]).optional(),
     /** Override the preset's TLS fingerprint (advanced). */
-    ja3?: string;
+    ja3: z.string().optional(),
     /** Override the preset's HTTP/2 fingerprint (advanced). */
-    akamai?: string;
+    akamai: z.string().optional(),
     /**
      * Encrypted Client Hello (hides SNI from network observers):
      *   true (default) — auto-fetch ECH config from DNS
      *   false — disable ECH
      *   "domain" — fetch ECH config from this domain instead of target
      */
-    ech?: boolean | string;
-}
+    ech: z.union([z.boolean(), z.string()]).optional(),
+});
+
+export type HTTPCloakSpec = z.infer<typeof httpCloakSpecSchema>;
 
 // ---------------------------------------------------------------------------
 // Username construction helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * One entry in a username's `scripts` chain. Wire form is a tagged
+ * discriminated union with `kind` as the discriminator:
+ *
+ *   - { kind: "ref",    name: "antibot" }
+ *   - { kind: "source", source: "def response_bailing(r): pass" }
+ *
+ * On the SDK input surface a bare string is also accepted as shorthand
+ * for `{ kind: "ref", name }` and normalised before emit (see
+ * `scriptEntryInputSchema`).
+ */
+export const scriptEntrySchema = z.discriminatedUnion("kind", [
+    z.strictObject({ kind: z.literal("ref"), name: z.string().min(1) }),
+    z.strictObject({ kind: z.literal("source"), source: z.string().min(1) }),
+]);
+export type ScriptEntry = z.infer<typeof scriptEntrySchema>;
+
+/**
+ * Accepted input form on the SDK surface: a bare string (treated as
+ * `{ kind: "ref", name }`) or any valid `ScriptEntry`. Normalised to
+ * `ScriptEntry` before being serialised.
+ */
+export const scriptEntryInputSchema = z.union([
+    z.string().min(1).transform((name) => ({ kind: "ref", name }) as const),
+    scriptEntrySchema,
+]);
+export type ScriptEntryInput = z.input<typeof scriptEntryInputSchema>;
+
+/** Build a ScriptEntry referencing a named server-side script. */
+export function scriptRef(name: string): ScriptEntry {
+    return { kind: "ref", name };
+}
+
+/** Build a ScriptEntry with inline Starlark source. */
+export function scriptSource(src: string): ScriptEntry {
+    return { kind: "source", source: src };
+}
 
 export interface BuildProxyUsernameOptions {
     proxySet: string;
@@ -101,8 +141,25 @@ export interface BuildProxyUsernameOptions {
     sessionParams: SessionParams;
     /** Informational metadata. Does NOT affect IP selection. */
     sessionMeta?: SessionMeta;
-    /** Enable TLS fingerprint spoofing. */
+    /**
+     * Enable MITM mode explicitly. Setting `httpcloak` or `scripts` also
+     * enables MITM implicitly. When MITM is on and `httpcloak` is omitted,
+     * the gateway defaults to the chrome-latest preset.
+     */
+    mitm?: boolean;
+    /** TLS fingerprint spoofing spec. Setting this implicitly enables MITM. */
     httpcloak?: HTTPCloakSpec;
+    /**
+     * Ordered chain of Starlark scripts evaluated server-side on this
+     * request's MITM'd response. Setting this implicitly enables MITM.
+     * Each entry is either:
+     *   - a bare string: shorthand reference to a named [[script]]
+     *   - `{ kind: "ref", name }`: explicit reference
+     *   - `{ kind: "source", source }`: inline source
+     *
+     * See SCRIPTS.md for the full guide.
+     */
+    scripts?: ScriptEntryInput[];
 }
 
 /**
@@ -139,8 +196,16 @@ export function buildProxyUsername(opts: BuildProxyUsernameOptions): string {
     if (opts.sessionMeta !== undefined && Object.keys(opts.sessionMeta).length > 0) {
         payload.session_meta = opts.sessionMeta;
     }
-    if (opts.httpcloak !== undefined) {
-        payload.httpcloak = opts.httpcloak;
+    const mitmOn = opts.mitm === true || opts.httpcloak !== undefined || (opts.scripts !== undefined && opts.scripts.length > 0);
+    if (mitmOn) {
+        const mitm: Record<string, unknown> = {};
+        if (opts.httpcloak !== undefined) {
+            mitm.httpcloak = opts.httpcloak;
+        }
+        if (opts.scripts !== undefined && opts.scripts.length > 0) {
+            mitm.scripts = opts.scripts.map((s) => scriptEntryInputSchema.parse(s));
+        }
+        payload.mitm = mitm;
     }
     const json = JSON.stringify(payload);
     return btoa(json);
@@ -155,14 +220,20 @@ export function parseProxyUsername(username: string): {
     minutes: number;
     sessionParams: SessionParams;
     sessionMeta?: SessionMeta;
+    mitm?: boolean;
     httpcloak?: HTTPCloakSpec;
+    scripts?: ScriptEntry[];
 } | null {
     try {
         const json = atob(username);
         const obj = JSON.parse(json);
         if (typeof obj !== "object" || obj === null) return null;
 
-        const { set, minutes, session_params: sessionParams, session_meta: sessionMeta, httpcloak } = obj;
+        // Top-level httpcloak / scripts are no longer accepted — they must
+        // live inside the `mitm` object.
+        if ("httpcloak" in obj || "scripts" in obj) return null;
+
+        const { set, minutes, session_params: sessionParams, session_meta: sessionMeta, mitm } = obj;
         if (
             typeof set !== "string" ||
             typeof minutes !== "number" ||
@@ -180,7 +251,9 @@ export function parseProxyUsername(username: string): {
             minutes: number;
             sessionParams: SessionParams;
             sessionMeta?: SessionMeta;
+            mitm?: boolean;
             httpcloak?: HTTPCloakSpec;
+            scripts?: ScriptEntry[];
         } = {
             proxySet: set,
             minutes,
@@ -191,8 +264,18 @@ export function parseProxyUsername(username: string): {
             if (!metaResult.success) return null;
             result.sessionMeta = metaResult.data;
         }
-        if (httpcloak !== undefined) {
-            result.httpcloak = httpcloak;
+        if (mitm !== undefined && mitm !== null) {
+            if (typeof mitm !== "object") return null;
+            result.mitm = true;
+            const { httpcloak, scripts } = mitm as { httpcloak?: HTTPCloakSpec; scripts?: unknown };
+            if (httpcloak !== undefined) {
+                result.httpcloak = httpcloak;
+            }
+            if (Array.isArray(scripts)) {
+                const arrResult = z.array(scriptEntryInputSchema).safeParse(scripts);
+                if (!arrResult.success) return null;
+                result.scripts = arrResult.data;
+            }
         }
         return result;
     } catch {
