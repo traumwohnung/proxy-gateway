@@ -15,19 +15,22 @@ import (
 //
 //	{"set":"residential", "minutes":5, "session_params":{"platform":"myapp","user":"alice"}}
 //	{"set":"direct", "httpcloak":{"preset":"chrome-latest"}}
-//	{"set":"direct", "httpcloak":{"preset":"chrome-latest","ja3":"771,...","akamai":"1:65536|..."}}
+//	{"set":"direct", "httpcloak":{"preset":"chrome-latest"}, "scripts":["antibot", {"source":"..."}]}
 type Username struct {
 	SessionParams SessionParams
 	Minutes       int
 	Httpcloak     *utils.HTTPCloakSpec   // optional; triggers MITM + TLS fingerprint spoofing
 	SessionMeta   map[string]interface{} // optional; informational only — never affects session/IP
-	BailScript    *BailScript            // optional; per-request MITM bail filter (Starlark)
+	Scripts       []*Script              // optional ordered chain; resolved from refs + inline
 	Raw           string                 // original JSON string, stored as session label
 }
 
-// ParseUsername parses a raw JSON username string.
-func ParseUsername(raw string) (*Username, error) {
-	// Accept both raw JSON and base64-encoded JSON (as produced by the client SDKs).
+// ParseUsername parses a raw JSON (or base64-encoded JSON) username string.
+// When the payload's `scripts` array contains string entries (references by
+// name) or `{"ref":"name"}` objects, registry is consulted to resolve them.
+// Pass nil registry to disable refs (any string/ref entry then errors at
+// parse time).
+func ParseUsername(raw string, registry ScriptRegistry) (*Username, error) {
 	jsonBytes := []byte(raw)
 	if len(raw) > 0 && raw[0] != '{' {
 		decoded, err := base64.StdEncoding.DecodeString(raw)
@@ -45,7 +48,7 @@ func ParseUsername(raw string) (*Username, error) {
 		SessionParams map[string]interface{} `json:"session_params"`
 		SessionMeta   map[string]interface{} `json:"session_meta"`
 		Httpcloak     json.RawMessage        `json:"httpcloak"`
-		BailScript    string                 `json:"bail_script"`
+		Scripts       []json.RawMessage      `json:"scripts"`
 	}
 	if err := json.Unmarshal(jsonBytes, &j); err != nil {
 		return nil, fmt.Errorf("username is not valid JSON: %w", err)
@@ -57,24 +60,110 @@ func ParseUsername(raw string) (*Username, error) {
 	if err != nil {
 		return nil, fmt.Errorf("httpcloak: %w", err)
 	}
-	var script *BailScript
-	if j.BailScript != "" {
-		if spec == nil {
-			return nil, fmt.Errorf("bail_script requires httpcloak to be set (MITM required)")
-		}
-		script, err = Compile("username", j.BailScript)
-		if err != nil {
-			return nil, fmt.Errorf("bail_script: %w", err)
-		}
+
+	scripts, err := resolveScriptList("username", j.Scripts, registry, "username")
+	if err != nil {
+		return nil, err
 	}
+	if len(scripts) > 0 && spec == nil {
+		return nil, fmt.Errorf("scripts requires httpcloak to be set (MITM required)")
+	}
+
 	return &Username{
 		SessionParams: SessionParams{Set: j.Set, Meta: j.SessionParams},
 		Minutes:       j.Minutes,
 		Httpcloak:     spec,
 		SessionMeta:   j.SessionMeta,
-		BailScript:    script,
+		Scripts:       scripts,
 		Raw:           string(jsonBytes),
 	}, nil
+}
+
+// resolveScriptList parses a JSON array whose entries are either:
+//   - a JSON string (reference to a named script in the registry)
+//   - an object {"ref": "name"} (same as string form)
+//   - an object {"source": "def bail(r): ..."} (inline source compiled now)
+//
+// Returns the ordered slice of *Script. inlineNamePrefix is used in the
+// compile-error context (e.g. "username" or "config:residential").
+func resolveScriptList(context string, entries []json.RawMessage, registry ScriptRegistry, inlineNamePrefix string) ([]*Script, error) {
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	out := make([]*Script, 0, len(entries))
+	for i, raw := range entries {
+		raw = trimJSONSpace(raw)
+		if len(raw) == 0 {
+			return nil, fmt.Errorf("%s scripts[%d]: empty entry", context, i)
+		}
+		// String form: bare reference.
+		if raw[0] == '"' {
+			var name string
+			if err := json.Unmarshal(raw, &name); err != nil {
+				return nil, fmt.Errorf("%s scripts[%d]: %w", context, i, err)
+			}
+			s, err := resolveRef(context, i, name, registry)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, s)
+			continue
+		}
+		// Object form: {"ref": "..."} or {"source": "..."}.
+		var obj struct {
+			Ref    string `json:"ref"`
+			Source string `json:"source"`
+		}
+		if err := json.Unmarshal(raw, &obj); err != nil {
+			return nil, fmt.Errorf("%s scripts[%d]: %w", context, i, err)
+		}
+		switch {
+		case obj.Ref != "" && obj.Source != "":
+			return nil, fmt.Errorf("%s scripts[%d]: set exactly one of 'ref' or 'source'", context, i)
+		case obj.Ref != "":
+			s, err := resolveRef(context, i, obj.Ref, registry)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, s)
+		case obj.Source != "":
+			name := fmt.Sprintf("%s[%d]", inlineNamePrefix, i)
+			s, err := Compile(name, obj.Source)
+			if err != nil {
+				return nil, fmt.Errorf("%s scripts[%d]: %w", context, i, err)
+			}
+			out = append(out, s)
+		default:
+			return nil, fmt.Errorf("%s scripts[%d]: must specify 'ref' or 'source'", context, i)
+		}
+	}
+	return out, nil
+}
+
+func resolveRef(context string, i int, name string, registry ScriptRegistry) (*Script, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("%s scripts[%d]: reference %q but no script registry configured", context, i, name)
+	}
+	s, ok := registry.Lookup(name)
+	if !ok {
+		return nil, fmt.Errorf("%s scripts[%d]: unknown script reference %q", context, i, name)
+	}
+	return s, nil
+}
+
+func trimJSONSpace(b []byte) []byte {
+	for len(b) > 0 && (b[0] == ' ' || b[0] == '\t' || b[0] == '\n' || b[0] == '\r') {
+		b = b[1:]
+	}
+	for len(b) > 0 {
+		c := b[len(b)-1]
+		if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+			b = b[:len(b)-1]
+			continue
+		}
+		break
+	}
+	return b
 }
 
 // ---------------------------------------------------------------------------
@@ -88,15 +177,8 @@ const (
 	ctxHTTPCloakPreset
 	ctxMinutes
 	ctxSessionMetaJSON
-	ctxBailScript
+	ctxScripts
 )
-
-// Note: the canonical session params JSON and provider name live on the
-// utils-side context (proxy-kit/utils) because the SessionManager and
-// downstream proxy-kit middleware need to read them without a dependency on
-// the gateway package. The gateway sets them in ParseJSONCreds /
-// buildProxysetRouter and reads them back via the utils.Get* accessors.
-// Don't add a gateway-side duplicate.
 
 func withMinutes(ctx context.Context, m int) context.Context {
 	return context.WithValue(ctx, ctxMinutes, m)
@@ -116,11 +198,6 @@ func getSet(ctx context.Context) string {
 	return v
 }
 
-// session_meta is informational metadata carried alongside the request for
-// analytics enrichment only. Unlike session_params it MUST NOT influence the
-// session seed or proxy/IP selection — kept on the gateway-local context to
-// guarantee it never reaches proxy-kit's session machinery. Stored per
-// session on the analytics side keyed by session_hash.
 func withSessionMetaJSON(ctx context.Context, canonicalJSON string) context.Context {
 	return context.WithValue(ctx, ctxSessionMetaJSON, canonicalJSON)
 }
@@ -139,17 +216,17 @@ func getHTTPCloakSpec(ctx context.Context) *utils.HTTPCloakSpec {
 	return v
 }
 
-// withBailScript stores the per-request compiled bail-filter script
-// (from username override or per-set default) on the context.
-func withBailScript(ctx context.Context, script *BailScript) context.Context {
-	if script == nil {
+// withScripts stores the per-request resolved script chain (username
+// override or per-set default) on the context.
+func withScripts(ctx context.Context, scripts []*Script) context.Context {
+	if len(scripts) == 0 {
 		return ctx
 	}
-	return context.WithValue(ctx, ctxBailScript, script)
+	return context.WithValue(ctx, ctxScripts, scripts)
 }
 
-func getBailScript(ctx context.Context) *BailScript {
-	v, _ := ctx.Value(ctxBailScript).(*BailScript)
+func getScripts(ctx context.Context) []*Script {
+	v, _ := ctx.Value(ctxScripts).([]*Script)
 	return v
 }
 
@@ -158,13 +235,14 @@ func getBailScript(ctx context.Context) *BailScript {
 // ---------------------------------------------------------------------------
 
 // ParseJSONCreds is middleware that parses RawUsername as a JSON object and
-// populates context with set, seed TTL, top-level seed, and session label.
-func ParseJSONCreds(next proxykit.Handler) proxykit.Handler {
+// populates context. registry is consulted when the username references
+// named scripts; pass nil to disable refs.
+func ParseJSONCreds(registry ScriptRegistry, next proxykit.Handler) proxykit.Handler {
 	return proxykit.HandlerFunc(func(ctx context.Context, req *proxykit.Request) (*proxykit.Result, error) {
 		if req.RawUsername == "" {
 			return nil, fmt.Errorf("empty username")
 		}
-		u, err := ParseUsername(req.RawUsername)
+		u, err := ParseUsername(req.RawUsername, registry)
 		if err != nil {
 			return nil, err
 		}
@@ -174,16 +252,11 @@ func ParseJSONCreds(next proxykit.Handler) proxykit.Handler {
 		ctx = utils.WithSeedTTL(ctx, time.Duration(u.Minutes)*time.Minute)
 		ctx = utils.WithTopLevelSeed(ctx, u.SessionParams.Seed())
 		ctx = utils.WithSessionLabel(ctx, u.Raw)
-		// Analytics fields live on the utils-side context so SessionManager
-		// (in proxy-kit) and trackUsage (in this package) both read them
-		// from a single source of truth. The gateway is hash-free: it
-		// ships canonical JSON only; the analytics service derives any
-		// hash it needs.
 		ctx = utils.WithSessionParamsJSON(ctx, u.SessionParams.CanonicalJSON())
 		ctx = utils.WithProxysetName(ctx, u.SessionParams.Set)
 		ctx = withSessionMetaJSON(ctx, MetaCanonicalJSON(u.SessionMeta))
 		ctx = withHTTPCloakSpec(ctx, u.Httpcloak)
-		ctx = withBailScript(ctx, u.BailScript)
+		ctx = withScripts(ctx, u.Scripts)
 
 		return next.Resolve(ctx, req)
 	})

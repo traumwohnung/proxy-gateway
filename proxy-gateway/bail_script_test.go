@@ -13,68 +13,113 @@ import (
 	proxykit "proxy-kit"
 )
 
-// ── ParseUsername: bail_script field ───────────────────────────────────────
+// ── ParseUsername: scripts array ───────────────────────────────────────────
 
-const validBail = `def bail(r): return None`
+const validInline = `{"source":"def bail(r): return None"}`
 
-func TestParseUsername_BailScriptCompiled(t *testing.T) {
-	raw := `{"set":"res","minutes":0,"httpcloak":{"preset":"chrome-latest"},"bail_script":"def bail(r): return 'datadome'"}`
-	u, err := ParseUsername(raw)
+func TestParseUsername_InlineScriptCompiled(t *testing.T) {
+	raw := `{"set":"res","httpcloak":{"preset":"chrome-latest"},"scripts":[` + validInline + `]}`
+	u, err := ParseUsername(raw, nil)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if u.BailScript == nil {
-		t.Fatal("expected compiled script, got nil")
+	if len(u.Scripts) != 1 || !u.Scripts[0].HasBail() {
+		t.Fatalf("want 1 script with bail, got %+v", u.Scripts)
 	}
 }
 
-func TestParseUsername_BailScriptRequiresHttpcloak(t *testing.T) {
-	raw := `{"set":"res","bail_script":"def bail(r): return None"}`
-	_, err := ParseUsername(raw)
+func TestParseUsername_ScriptsRequireHttpcloak(t *testing.T) {
+	raw := `{"set":"res","scripts":[` + validInline + `]}`
+	_, err := ParseUsername(raw, nil)
 	if err == nil || !strings.Contains(err.Error(), "requires httpcloak") {
-		t.Fatalf("want httpcloak-required error, got %v", err)
+		t.Fatalf("want httpcloak-required, got %v", err)
 	}
 }
 
-func TestParseUsername_BailScriptCompileErrorSurfaces(t *testing.T) {
-	raw := `{"set":"res","httpcloak":{"preset":"chrome-latest"},"bail_script":"this is not starlark"}`
-	_, err := ParseUsername(raw)
-	if err == nil || !strings.Contains(err.Error(), "bail_script") {
-		t.Fatalf("want script-compile error, got %v", err)
+func TestParseUsername_RefWithoutRegistryErrors(t *testing.T) {
+	raw := `{"set":"res","httpcloak":{"preset":"chrome-latest"},"scripts":["antibot"]}`
+	_, err := ParseUsername(raw, nil)
+	if err == nil || !strings.Contains(err.Error(), "no script registry") {
+		t.Fatalf("want no-registry error, got %v", err)
 	}
 }
 
-func TestParseUsername_NoBailScriptIsOK(t *testing.T) {
-	raw := `{"set":"res","minutes":0,"httpcloak":{"preset":"chrome-latest"}}`
-	u, err := ParseUsername(raw)
+func TestParseUsername_RefResolvesViaRegistry(t *testing.T) {
+	s, _ := Compile("antibot", `def bail(r): return None`)
+	reg := scriptMap{"antibot": s}
+	raw := `{"set":"res","httpcloak":{"preset":"chrome-latest"},"scripts":["antibot"]}`
+	u, err := ParseUsername(raw, reg)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if u.BailScript != nil {
-		t.Fatal("want nil script when field absent")
+	if len(u.Scripts) != 1 || u.Scripts[0] != s {
+		t.Fatalf("ref did not resolve to registry entry")
+	}
+}
+
+func TestParseUsername_UnknownRefErrors(t *testing.T) {
+	reg := scriptMap{}
+	raw := `{"set":"res","httpcloak":{"preset":"chrome-latest"},"scripts":["missing"]}`
+	_, err := ParseUsername(raw, reg)
+	if err == nil || !strings.Contains(err.Error(), `unknown script reference "missing"`) {
+		t.Fatalf("want unknown-ref error, got %v", err)
+	}
+}
+
+func TestParseUsername_MixedRefAndInline(t *testing.T) {
+	s, _ := Compile("a", `def bail(r): return None`)
+	reg := scriptMap{"a": s}
+	raw := `{"set":"res","httpcloak":{"preset":"chrome-latest"},"scripts":["a",` + validInline + `,{"ref":"a"}]}`
+	u, err := ParseUsername(raw, reg)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(u.Scripts) != 3 {
+		t.Fatalf("want 3 scripts, got %d", len(u.Scripts))
+	}
+}
+
+func TestParseUsername_RefAndSourceTogetherErrors(t *testing.T) {
+	raw := `{"set":"res","httpcloak":{"preset":"chrome-latest"},"scripts":[{"ref":"x","source":"def bail(r): return None"}]}`
+	_, err := ParseUsername(raw, scriptMap{})
+	if err == nil || !strings.Contains(err.Error(), "exactly one of") {
+		t.Fatalf("want exactly-one-of error, got %v", err)
+	}
+}
+
+func TestParseUsername_EmptyScriptsArrayIsOK(t *testing.T) {
+	raw := `{"set":"res","httpcloak":{"preset":"chrome-latest"},"scripts":[]}`
+	u, err := ParseUsername(raw, nil)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(u.Scripts) != 0 {
+		t.Fatalf("want empty, got %d", len(u.Scripts))
 	}
 }
 
 // ── ParseJSONCreds: context propagation ────────────────────────────────────
 
-func TestParseJSONCreds_PutsBailScriptOnContext(t *testing.T) {
-	var seen *BailScript
-	h := ParseJSONCreds(proxykit.HandlerFunc(func(ctx context.Context, _ *proxykit.Request) (*proxykit.Result, error) {
-		seen = getBailScript(ctx)
+func TestParseJSONCreds_PutsScriptsOnContext(t *testing.T) {
+	s, _ := Compile("antibot", `def bail(r): return None`)
+	reg := scriptMap{"antibot": s}
+	var seen []*Script
+	h := ParseJSONCreds(reg, proxykit.HandlerFunc(func(ctx context.Context, _ *proxykit.Request) (*proxykit.Result, error) {
+		seen = getScripts(ctx)
 		return &proxykit.Result{Proxy: &proxykit.Proxy{Host: "x", Port: 1}}, nil
 	}))
 	_, err := h.Resolve(context.Background(), &proxykit.Request{
-		RawUsername: `{"set":"res","httpcloak":{"preset":"chrome-latest"},"bail_script":"` + validBail + `"}`,
+		RawUsername: `{"set":"res","httpcloak":{"preset":"chrome-latest"},"scripts":["antibot"]}`,
 	})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if seen == nil {
-		t.Fatal("expected script on context")
+	if len(seen) != 1 {
+		t.Fatalf("expected 1 script on context, got %d", len(seen))
 	}
 }
 
-// ── Per-set router: installs ResponseHook ──────────────────────────────────
+// ── LoadConfig: named scripts + per-set default chain ─────────────────────
 
 func writeConfig(t *testing.T, body string) (string, string) {
 	t.Helper()
@@ -86,29 +131,38 @@ func writeConfig(t *testing.T, body string) (string, string) {
 	return dir, path
 }
 
-func TestLoadConfig_CompilesPerSetBail(t *testing.T) {
+func TestLoadConfig_CompilesNamedScripts(t *testing.T) {
 	body := `
+[[script]]
+name = "antibot"
+source = "def bail(r): return None"
+
 [[proxy_set]]
 name = "res"
 provider = "none"
-bail_script = "def bail(r): return None"
+default_scripts = ["antibot"]
 `
 	_, path := writeConfig(t, body)
 	cfg, err := LoadConfig(path)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if cfg.ProxySets[0].CompiledBail() == nil {
-		t.Fatal("want compiled script")
+	if cfg.Registry() == nil {
+		t.Fatal("want registry populated")
+	}
+	if _, ok := cfg.Registry().Lookup("antibot"); !ok {
+		t.Fatal("registry missing antibot")
+	}
+	if got := cfg.ProxySets[0].ResolvedDefaults(); len(got) != 1 {
+		t.Fatalf("want 1 default, got %d", len(got))
 	}
 }
 
-func TestLoadConfig_BadBailFailsBoot(t *testing.T) {
+func TestLoadConfig_BadScriptSourceFailsBoot(t *testing.T) {
 	body := `
-[[proxy_set]]
-name = "res"
-provider = "none"
-bail_script = "this is not starlark"
+[[script]]
+name = "bad"
+source = "this is not starlark"
 `
 	_, path := writeConfig(t, body)
 	if _, err := LoadConfig(path); err == nil {
@@ -116,17 +170,52 @@ bail_script = "this is not starlark"
 	}
 }
 
-func TestBuildServer_PerSetBailInstallsHook(t *testing.T) {
+func TestLoadConfig_DuplicateNameFails(t *testing.T) {
+	body := `
+[[script]]
+name = "dup"
+source = "def bail(r): return None"
+
+[[script]]
+name = "dup"
+source = "def bail(r): return None"
+`
+	_, path := writeConfig(t, body)
+	if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("want duplicate-name error, got %v", err)
+	}
+}
+
+func TestLoadConfig_UnknownDefaultScriptRefFailsBoot(t *testing.T) {
 	body := `
 [[proxy_set]]
 name = "res"
 provider = "none"
-bail_script = """
+default_scripts = ["missing"]
+`
+	_, path := writeConfig(t, body)
+	if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "unknown script") {
+		t.Fatalf("want unknown-script error, got %v", err)
+	}
+}
+
+// ── End-to-end: per-set default + per-call override ───────────────────────
+
+func TestBuildServer_PerSetDefaultInstallsHook(t *testing.T) {
+	body := `
+[[script]]
+name = "antibot"
+source = """
 def bail(r):
     if r.scan(b'BLOCK') >= 0:
         return 'blocked'
     return None
 """
+
+[[proxy_set]]
+name = "res"
+provider = "none"
+default_scripts = ["antibot"]
 `
 	dir, path := writeConfig(t, body)
 	cfg, err := LoadConfig(path)
@@ -137,96 +226,95 @@ def bail(r):
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-
 	result, err := srv.Pipeline.Resolve(context.Background(), &proxykit.Request{
-		RawUsername: `{"set":"res","minutes":0,"httpcloak":{"preset":"chrome-latest"}}`,
+		RawUsername: `{"set":"res","httpcloak":{"preset":"chrome-latest"}}`,
 	})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
 	if result == nil || result.ResponseHook == nil {
-		t.Fatalf("expected ResponseHook from per-set default; result=%+v", result)
+		t.Fatalf("want ResponseHook from per-set default")
 	}
-
-	// Bail path: body contains the marker → hook returns same status with
-	// X-Bail-Reason header; body preserved up to bail point.
-	blocked := &http.Response{
-		StatusCode: 200,
-		Header:     http.Header{},
-		Body:       io.NopCloser(bytes.NewReader([]byte("xxBLOCKxx"))),
-	}
-	hooked := result.ResponseHook(blocked)
-	if hooked.StatusCode != 200 {
-		t.Fatalf("status must be preserved, got %d", hooked.StatusCode)
-	}
+	hooked := result.ResponseHook(&http.Response{
+		StatusCode: 200, Header: http.Header{},
+		Body: io.NopCloser(bytes.NewReader([]byte("xxBLOCKxx"))),
+	})
 	if hooked.Header.Get(HeaderBailScriptOutput) != "blocked" {
-		t.Fatalf("X-Bail-Reason=%q", hooked.Header.Get(HeaderBailScriptOutput))
-	}
-
-	// Passthrough path: no marker → original status + body intact.
-	ok := &http.Response{
-		StatusCode: 200,
-		Header:     http.Header{},
-		Body:       io.NopCloser(bytes.NewReader([]byte("clean payload"))),
-	}
-	hooked2 := result.ResponseHook(ok)
-	if hooked2.StatusCode != 200 {
-		t.Fatalf("want 200, got %d", hooked2.StatusCode)
-	}
-	if hooked2.Header.Get(HeaderBailScriptOutput) != "" {
-		t.Fatalf("unexpected bail header on passthrough")
-	}
-	body2, _ := io.ReadAll(hooked2.Body)
-	if string(body2) != "clean payload" {
-		t.Fatalf("body=%q", body2)
+		t.Fatalf("header=%q", hooked.Header.Get(HeaderBailScriptOutput))
 	}
 }
 
-func TestBuildServer_PerCallBailOverridesPerSet(t *testing.T) {
+func TestBuildServer_PerCallChainOverridesPerSet(t *testing.T) {
 	body := `
+[[script]]
+name = "ignore"
+source = "def bail(r): return None"
+
 [[proxy_set]]
 name = "res"
 provider = "none"
-bail_script = "def bail(r): return None"
+default_scripts = ["ignore"]
 `
 	dir, path := writeConfig(t, body)
 	cfg, _ := LoadConfig(path)
 	srv, _ := BuildServer(cfg, dir, "", nil)
 
-	override := `def bail(r): return 'override-fires'`
-	raw := `{"set":"res","minutes":0,"httpcloak":{"preset":"chrome-latest"},"bail_script":` +
-		jsonString(override) + `}`
-
+	override := `{"source":"def bail(r): return 'override'"}`
+	raw := `{"set":"res","httpcloak":{"preset":"chrome-latest"},"scripts":[` + override + `]}`
 	result, err := srv.Pipeline.Resolve(context.Background(), &proxykit.Request{RawUsername: raw})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
-	}
-	if result.ResponseHook == nil {
-		t.Fatal("expected ResponseHook")
 	}
 	hooked := result.ResponseHook(&http.Response{
 		StatusCode: 200, Header: http.Header{},
 		Body: io.NopCloser(bytes.NewReader([]byte("anything"))),
 	})
-	if hooked.Header.Get(HeaderBailScriptOutput) != "override-fires" {
+	if hooked.Header.Get(HeaderBailScriptOutput) != "override" {
 		t.Fatalf("override did not fire: header=%q", hooked.Header.Get(HeaderBailScriptOutput))
 	}
 }
 
-func jsonString(s string) string {
-	var b strings.Builder
-	b.WriteByte('"')
-	for _, r := range s {
-		switch r {
-		case '"', '\\':
-			b.WriteByte('\\')
-			b.WriteRune(r)
-		case '\n':
-			b.WriteString(`\n`)
-		default:
-			b.WriteRune(r)
-		}
+// ── Chain ordering: first bail wins ───────────────────────────────────────
+
+func TestApply_ChainFirstBailWins(t *testing.T) {
+	first, _ := Compile("first", `def bail(r): return 'first'`)
+	second, _ := Compile("second", `def bail(r): return 'second'`)
+	resp := &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader([]byte("body")))}
+	got := Apply(context.Background(), []*Script{first, second}, resp, 0, 0)
+	if got.Header.Get(HeaderBailScriptOutput) != "first" {
+		t.Fatalf("want first, got %q", got.Header.Get(HeaderBailScriptOutput))
 	}
-	b.WriteByte('"')
-	return b.String()
+	if got.Header.Get("X-Bail-Script-Name") != "first" {
+		t.Fatalf("want bailed-by=first, got %q", got.Header.Get("X-Bail-Script-Name"))
+	}
+}
+
+func TestApply_ChainSkipsNoneReturners(t *testing.T) {
+	noop, _ := Compile("noop", `def bail(r): return None`)
+	hit, _ := Compile("hit", `def bail(r): return 'hit'`)
+	resp := &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader([]byte("body")))}
+	got := Apply(context.Background(), []*Script{noop, hit}, resp, 0, 0)
+	if got.Header.Get(HeaderBailScriptOutput) != "hit" {
+		t.Fatalf("want hit, got %q", got.Header.Get(HeaderBailScriptOutput))
+	}
+}
+
+func TestApply_ChainErroringScriptDisabledLaterScriptStillRuns(t *testing.T) {
+	bad, _ := Compile("bad", `def bail(r): fail("boom")`)
+	hit, _ := Compile("hit", `def bail(r): return 'hit'`)
+	resp := &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader([]byte("body")))}
+	got := Apply(context.Background(), []*Script{bad, hit}, resp, 0, 0)
+	if got.Header.Get(HeaderBailScriptOutput) != "hit" {
+		t.Fatalf("want hit, got %q", got.Header.Get(HeaderBailScriptOutput))
+	}
+	if !strings.Contains(got.Header.Get(HeaderBailScriptError), "bad:") {
+		t.Fatalf("want error header with bad: prefix, got %q", got.Header.Get(HeaderBailScriptError))
+	}
+}
+
+func TestCompile_NoRecognisedEntryPointFails(t *testing.T) {
+	_, err := Compile("empty", `x = 1`)
+	if err == nil || !strings.Contains(err.Error(), "no recognised entry point") {
+		t.Fatalf("want no-entry-point error, got %v", err)
+	}
 }

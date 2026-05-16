@@ -43,7 +43,7 @@ func BuildServer(cfg *Config, configDir string, proxyPassword string, tracker *U
 	}
 
 	conditionalMITM := utils.ConditionalFingerprintMITM(ca, getHTTPCloakSpec, inner)
-	pipeline := PasswordAuth(proxyPassword, ParseJSONCreds(conditionalMITM))
+	pipeline := PasswordAuth(proxyPassword, ParseJSONCreds(cfg.Registry(), conditionalMITM))
 
 	return &Server{
 		Pipeline: pipeline,
@@ -114,10 +114,10 @@ func buildProxysetRouter(cfg *Config, configDir string) (proxykit.Handler, error
 		}
 		// Tag the source with its provider type so emission downstream knows
 		// which upstream produced this binding. Captured by value so each set
-		// gets its own closure. defaultBail is the per-set fallback used
-		// when the username doesn't carry bail_script.
+		// gets its own closure. defaultChain is the per-set fallback used
+		// when the username doesn't carry its own `scripts` array.
 		provider := raw.SourceType
-		defaultBail := raw.compiledBail
+		defaultChain := raw.resolvedDefaults
 		baseSrc := src
 		sources[raw.Name] = proxykit.HandlerFunc(func(ctx context.Context, req *proxykit.Request) (*proxykit.Result, error) {
 			ctx = utils.WithProviderName(ctx, provider)
@@ -125,20 +125,21 @@ func buildProxysetRouter(cfg *Config, configDir string) (proxykit.Handler, error
 			if err != nil || result == nil {
 				return result, err
 			}
-			// Resolve the script: per-call override (from username) > per-set
-			// default > none. Only wires a hook when one is present.
-			script := getBailScript(ctx)
-			if script == nil {
-				script = defaultBail
+			// Resolve the chain: per-call override (from username) >
+			// per-set default > none. Install a hook only when at least
+			// one script is present.
+			chain := getScripts(ctx)
+			if len(chain) == 0 {
+				chain = defaultChain
 			}
-			if script != nil {
+			if len(chain) > 0 {
 				prev := result.ResponseHook
 				hookCtx := ctx
 				result.ResponseHook = func(resp *http.Response) *http.Response {
 					if prev != nil {
 						resp = prev(resp)
 					}
-					return Apply(hookCtx, script, resp, 0, 0)
+					return Apply(hookCtx, chain, resp, 0, 0)
 				}
 			}
 			return result, nil

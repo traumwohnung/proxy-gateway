@@ -1,5 +1,9 @@
-// Bail-script dispatch — glue that drives a *BailScript against a streaming
-// upstream response.
+// Bail-phase dispatch — drives an ordered chain of *Script against a
+// streaming upstream response, calling each script's bail(r) in turn until
+// one bails or the chain runs out.
+//
+// Other phases (future request_modify / response_modify) will live in
+// their own files alongside this one and consume the same chain.
 package main
 
 import (
@@ -19,37 +23,46 @@ const (
 
 	// DefaultReleaseCapBytes is the cumulative cap on bytes the gateway will
 	// buffer before releasing the response to the client unconditionally
-	// (with the script disabled for the remaining stream). Configurable per
-	// proxy_set.
+	// (with the bail chain disabled for the remaining stream).
 	DefaultReleaseCapBytes = 1024 * 1024
 
-	// HeaderBailScriptOutput carries the script's bail string when it
-	// returned one before any body was forwarded to the client.
+	// HeaderBailScriptOutput carries the script's bail string when one in
+	// the chain returned one before any body was forwarded to the client.
 	HeaderBailScriptOutput = "X-Bail-Script-Output"
 
 	// HeaderBailScriptError carries the script's runtime error message when
-	// it raised before any body was forwarded to the client.
+	// it raised before any body was forwarded to the client. The header is
+	// prefixed with the script name when more than one script is chained.
 	HeaderBailScriptError = "X-Bail-Script-Error"
 )
 
-// Apply runs the bail script against the streaming upstream response and
-// returns a (possibly transformed) *http.Response. Status code is always
-// preserved. Behaviour by outcome (decided before headers go to the client):
+// Apply runs each script's bail(r) in chain order against the streaming
+// upstream response and returns a (possibly transformed) *http.Response.
+// Status code is always preserved.
 //
-//   - Bail (script returned string): close upstream, attach
-//     X-Bail-Script-Output header, body = bytes buffered up to the bail point.
-//   - Script error (script raised / timed out / blew step budget): attach
-//     X-Bail-Script-Error header, body = buffered prefix + remaining
-//     upstream streamed normally; script does not run again for this request.
-//   - Cap reached without decision: release as-is, no headers added, script
-//     no longer runs for this request.
-//   - No bail, no error (script returned None on every chunk through EOF):
-//     body streams through unchanged.
+// Per-phase rules:
 //
-// chunkSize and releaseCap default to DefaultChunkBytes / DefaultReleaseCapBytes
-// when zero is passed.
-func Apply(ctx context.Context, script *BailScript, resp *http.Response, chunkSize, releaseCap int) *http.Response {
-	if resp == nil || resp.Body == nil || script == nil {
+//   - First script that returns a non-empty string wins; subsequent
+//     scripts' bail() are NOT called (short-circuit).
+//   - A script that raises is marked disabled for this request; later
+//     scripts continue to be polled.
+//   - When the buffered body reaches releaseCap or upstream EOFs without
+//     any script bailing, the chain stops and the response streams as-is.
+//
+// chunkSize and releaseCap default to DefaultChunkBytes /
+// DefaultReleaseCapBytes when zero is passed.
+func Apply(ctx context.Context, chain []*Script, resp *http.Response, chunkSize, releaseCap int) *http.Response {
+	if resp == nil || resp.Body == nil || len(chain) == 0 {
+		return resp
+	}
+	// Filter the chain to scripts that actually define bail().
+	active := make([]*Script, 0, len(chain))
+	for _, s := range chain {
+		if s.HasBail() {
+			active = append(active, s)
+		}
+	}
+	if len(active) == 0 {
 		return resp
 	}
 	if chunkSize <= 0 {
@@ -62,69 +75,109 @@ func Apply(ctx context.Context, script *BailScript, resp *http.Response, chunkSi
 	bb := newBufferedBody(resp.Body, releaseCap)
 	headers := map[string][]string(resp.Header)
 
-	// Initial call: headers only, empty buffer.
-	reason, err := script.Call(ctx, resp.StatusCode, headers, bb.Peek)
-	if err != nil {
-		return scriptErroredResponse(resp, bb, err)
+	// Track which scripts have errored — they stay disabled for the rest
+	// of the request. Indexed parallel to `active`.
+	disabled := make([]bool, len(active))
+	scriptErrors := make([]string, 0, 1)
+
+	// Run the chain once now (headers visible, body empty).
+	reason, bailedBy, errMsg := callChain(ctx, active, disabled, resp.StatusCode, headers, bb.Peek)
+	if errMsg != "" {
+		scriptErrors = append(scriptErrors, errMsg)
 	}
 	if reason != "" {
 		_ = bb.Close()
-		return bailResponse(resp, bb, reason)
+		return bailResponse(resp, bb, reason, bailedBy, scriptErrors)
 	}
 
-	// Stream-and-poll until bail / script error / cap / EOF.
+	// Stream-and-poll until any bail / cap / EOF.
 	for {
 		if bb.Len() >= releaseCap {
-			break // cap reached without decision; release as-is
+			break
 		}
 		_, pullErr := bb.Pull(chunkSize)
 		if pullErr == io.EOF {
-			// Final call so script sees the complete body.
-			reason, err = script.Call(ctx, resp.StatusCode, headers, bb.Peek)
-			if err != nil {
-				return scriptErroredResponse(resp, bb, err)
+			reason, bailedBy, errMsg = callChain(ctx, active, disabled, resp.StatusCode, headers, bb.Peek)
+			if errMsg != "" {
+				scriptErrors = append(scriptErrors, errMsg)
 			}
 			if reason != "" {
 				_ = bb.Close()
-				return bailResponse(resp, bb, reason)
+				return bailResponse(resp, bb, reason, bailedBy, scriptErrors)
 			}
 			break
 		}
 		if pullErr != nil {
-			break // upstream error — let copyResponse surface it as-is
+			break // upstream error; let copyResponse surface it
 		}
-		reason, err = script.Call(ctx, resp.StatusCode, headers, bb.Peek)
-		if err != nil {
-			return scriptErroredResponse(resp, bb, err)
+		reason, bailedBy, errMsg = callChain(ctx, active, disabled, resp.StatusCode, headers, bb.Peek)
+		if errMsg != "" {
+			scriptErrors = append(scriptErrors, errMsg)
 		}
 		if reason != "" {
 			_ = bb.Close()
-			return bailResponse(resp, bb, reason)
+			return bailResponse(resp, bb, reason, bailedBy, scriptErrors)
 		}
 	}
 
-	// No bail, no error: passthrough. Re-attach the wrapper so the
-	// buffered prefix is delivered before continuing from upstream.
+	// Passthrough. Re-attach wrapper + surface any script errors via header.
 	resp.Body = bb
+	if len(scriptErrors) > 0 {
+		resp.Header.Set(HeaderBailScriptError, truncateForHeader(strings.Join(scriptErrors, " | ")))
+	}
 	return resp
 }
 
-func bailResponse(orig *http.Response, bb *bufferedBody, reason string) *http.Response {
+// callChain runs bail() on every still-enabled script in order. Returns:
+//   - reason: first non-empty bail string, or ""
+//   - bailedBy: name of the script that bailed (empty if none)
+//   - errMsg: joined error messages from scripts that raised THIS round,
+//             with "script_name: msg" formatting (empty if none)
+//
+// Scripts that raise are marked disabled in the parallel `disabled` slice.
+func callChain(ctx context.Context, scripts []*Script, disabled []bool, status int, headers map[string][]string, peek PeekFunc) (reason, bailedBy, errMsg string) {
+	var errs []string
+	for i, s := range scripts {
+		if disabled[i] {
+			continue
+		}
+		r, err := s.CallBail(ctx, status, headers, peek)
+		if err != nil {
+			disabled[i] = true
+			errs = append(errs, fmt.Sprintf("%s: %s", s.name, err.Error()))
+			slog.Warn("bail script disabled for request after error",
+				"script", s.name, "err", err)
+			continue
+		}
+		if r != "" {
+			return r, s.name, joinErrs(errs)
+		}
+	}
+	return "", "", joinErrs(errs)
+}
+
+func joinErrs(errs []string) string {
+	if len(errs) == 0 {
+		return ""
+	}
+	return strings.Join(errs, " | ")
+}
+
+func bailResponse(orig *http.Response, bb *bufferedBody, reason, bailedBy string, scriptErrors []string) *http.Response {
 	out := cloneRespShallow(orig)
 	out.Header = cloneHeadersWithoutEncoding(orig.Header)
 	out.Header.Set(HeaderBailScriptOutput, reason)
+	if bailedBy != "" {
+		out.Header.Set("X-Bail-Script-Name", bailedBy)
+	}
+	if len(scriptErrors) > 0 {
+		out.Header.Set(HeaderBailScriptError, truncateForHeader(strings.Join(scriptErrors, " | ")))
+	}
 	body := append([]byte(nil), bb.buf...)
 	out.Body = io.NopCloser(bytesReader(body))
 	out.ContentLength = int64(len(body))
 	out.Header.Set("Content-Length", fmt.Sprintf("%d", len(body)))
 	return out
-}
-
-func scriptErroredResponse(orig *http.Response, bb *bufferedBody, err error) *http.Response {
-	slog.Warn("bail script disabled for request after error", "err", err)
-	orig.Header.Set(HeaderBailScriptError, truncateForHeader(err.Error()))
-	orig.Body = bb
-	return orig
 }
 
 // ── bufferedBody ───────────────────────────────────────────────────────────
@@ -156,9 +209,6 @@ func (b *bufferedBody) Peek(n int) []byte {
 	return b.buf[:n]
 }
 
-// Pull reads up to n more bytes from upstream into the buffer. Returns the
-// number of bytes appended and io.EOF on upstream exhaustion. Short returns
-// are fine — the script loop just calls Pull again next round.
 func (b *bufferedBody) Pull(n int) (int, error) {
 	if b.eof {
 		return 0, io.EOF
@@ -205,7 +255,7 @@ func (b *bufferedBody) Close() error {
 	return b.upstream.Close()
 }
 
-// ── small helpers (shared by both bail_apply and script_regex) ─────────────
+// ── small helpers ─────────────────────────────────────────────────────────
 
 func cloneRespShallow(r *http.Response) *http.Response {
 	cp := *r
@@ -235,8 +285,6 @@ func truncateForHeader(s string) string {
 	return s
 }
 
-// bytesReadCloser is a single-allocation wrapper that lets a byte slice be
-// re-read as an io.ReadCloser without dragging in bytes.Reader's seek surface.
 type bytesReadCloser struct {
 	data []byte
 	pos  int

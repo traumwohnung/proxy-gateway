@@ -61,7 +61,7 @@ func runCall(t *testing.T, src string, buf []byte) (string, error) {
 		}
 		return buf[:n]
 	}
-	return s.Call(context.Background(), 200, nil, peek)
+	return s.CallBail(context.Background(), 200, nil, peek)
 }
 
 func TestCall_NoneContinues(t *testing.T) {
@@ -125,7 +125,7 @@ def bail(r):
         return "is-html"
     return None
 `)
-	reason, err := s.Call(context.Background(), 200,
+	reason, err := s.CallBail(context.Background(), 200,
 		map[string][]string{"Content-Type": {"text/html"}},
 		func(int) []byte { return nil })
 	if err != nil || reason != "is-html" {
@@ -158,7 +158,7 @@ def bail(r):
 `)
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { time.Sleep(5 * time.Millisecond); cancel() }()
-	_, err := s.Call(ctx, 200, nil, func(int) []byte { return nil })
+	_, err := s.CallBail(ctx, 200, nil, func(int) []byte { return nil })
 	if err == nil {
 		t.Fatal("want cancellation error")
 	}
@@ -249,7 +249,7 @@ func readAll(t *testing.T, body io.ReadCloser) string {
 func TestApply_NoBail_DeliversFullBody(t *testing.T) {
 	s, _ := Compile("none", `def bail(r): return None`)
 	resp := makeResp("hello world")
-	got := Apply(context.Background(), s, resp, 0, 0)
+	got := Apply(context.Background(), []*Script{s}, resp, 0, 0)
 	if got.StatusCode != 200 {
 		t.Fatalf("status %d", got.StatusCode)
 	}
@@ -278,7 +278,7 @@ def bail(r):
     return None
 `
 	s, _ := Compile("ab", src)
-	got := Apply(context.Background(), s, resp, 0, 0)
+	got := Apply(context.Background(), []*Script{s}, resp, 0, 0)
 	if got.StatusCode != 403 {
 		t.Fatalf("status must be preserved, got %d", got.StatusCode)
 	}
@@ -299,7 +299,7 @@ func TestApply_ScriptError_AddsHeaderAndContinues(t *testing.T) {
 	resp := makeResp("full body delivered intact")
 	src := `def bail(r): fail("boom")`
 	s, _ := Compile("bad", src)
-	got := Apply(context.Background(), s, resp, 0, 0)
+	got := Apply(context.Background(), []*Script{s}, resp, 0, 0)
 	if got.StatusCode != 200 {
 		t.Fatalf("status %d", got.StatusCode)
 	}
@@ -320,7 +320,7 @@ func TestApply_BailLimitsUpstreamReads(t *testing.T) {
 	resp := &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(r)}
 	src := `def bail(r): return "immediate"`
 	s, _ := Compile("imm", src)
-	_ = Apply(context.Background(), s, resp, 8192, 0)
+	_ = Apply(context.Background(), []*Script{s}, resp, 8192, 0)
 	if pulledBytes > 8192 {
 		t.Fatalf("pulled %d bytes, want ≤ initial chunk size (~8 KiB)", pulledBytes)
 	}
@@ -359,7 +359,7 @@ def bail(r):
     return None
 `
 	s, _ := Compile("late", src)
-	got := Apply(context.Background(), s, resp, 4096, 0)
+	got := Apply(context.Background(), []*Script{s}, resp, 4096, 0)
 	if got.Header.Get(HeaderBailScriptOutput) != "datadome" {
 		t.Fatalf("expected later-chunk bail, header=%q", got.Header.Get(HeaderBailScriptOutput))
 	}
@@ -370,7 +370,7 @@ func TestApply_ReleaseCapWithoutDecision(t *testing.T) {
 	full := strings.Repeat("y", 10*1024)
 	resp := makeResp(full)
 	s, _ := Compile("none", `def bail(r): return None`)
-	got := Apply(context.Background(), s, resp, 1024, 2048) // cap < body
+	got := Apply(context.Background(), []*Script{s}, resp, 1024, 2048) // cap < body
 	if got.Header.Get(HeaderBailScriptOutput) != "" {
 		t.Fatalf("no bail expected, got %q", got.Header.Get(HeaderBailScriptOutput))
 	}

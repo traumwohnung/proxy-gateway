@@ -1,21 +1,15 @@
-// Bail script — first concrete script type built on script_engine.
+// Script — compiled Starlark module with zero or more known entry points.
 //
-// A bail script is a short Starlark program that runs server-side on each
-// MITM'd response. It cannot modify status code, headers, or body — its
-// only output is a decision: "should the gateway close the upstream
-// connection now?". See BAIL_SCRIPTS.md for the full guide.
+// Today the only recognised entry is `bail(r)`. Future phases (e.g.
+// request_modify, response_modify) will land here as additional optional
+// entry points that scripts may define independently. Compile errors if
+// the source defines no recognised entry point at all (catches typos
+// like `def ball(r): …`).
 //
-// The script defines a top-level `bail(r)` function returning:
-//
-//   - None / no return: continue (called again after next body chunk)
-//   - str:              bail with that string as reason
-//   - any raised err:   disable for the rest of this request
-//
-// `r` exposes status, headers (lower-cased dict), peek(n=None), scan(needle).
-//
-// Future scripts (request_modify, response_modify) will plug into
-// script_engine the same way, with their own entry-point names and handle
-// types — the engine layer itself is type-agnostic.
+// A request's script chain is an ordered slice of *Script. Each phase
+// dispatches across the chain in order. The bail phase short-circuits on
+// the first script that bails; future modify phases are expected to run
+// every script in order regardless.
 package main
 
 import (
@@ -28,33 +22,67 @@ import (
 	"go.starlark.net/starlark"
 )
 
-// BailScript is a compiled, ready-to-run bail filter.
-type BailScript struct {
-	inner *script
+// Script is a compiled Starlark module that may define any combination of
+// the recognised entry points. Inspect HasBail() etc. before dispatching.
+type Script struct {
+	name string
+	bail starlark.Value // nil if not defined
 }
 
-// Compile parses and validates a bail-script source. Returned *BailScript can
-// be reused across many invocations.
-func Compile(name, src string) (*BailScript, error) {
-	s, err := compileScript(name, src, "bail")
+// recognisedEntryPoints lists every entry function name the gateway knows
+// about. Adding a new function type (e.g. "response_modify") means: add it
+// here, add a typed field on Script, and add a Call* method.
+var recognisedEntryPoints = []string{"bail"}
+
+// Compile parses and validates a script source. At least one recognised
+// entry point must be defined; otherwise the script can't do anything and
+// is rejected with a hopefully-useful error.
+func Compile(name, src string) (*Script, error) {
+	inner, err := compileScript(name, src, "" /* no required entry */)
 	if err != nil {
-		return nil, fmt.Errorf("bail %w", err)
+		return nil, err
 	}
-	return &BailScript{inner: s}, nil
+	s := &Script{name: name}
+	for _, ep := range recognisedEntryPoints {
+		fn, ok := inner.globals[ep]
+		if !ok {
+			continue
+		}
+		if _, ok := fn.(starlark.Callable); !ok {
+			return nil, fmt.Errorf("script %q: %s is not callable", name, ep)
+		}
+		switch ep {
+		case "bail":
+			s.bail = fn
+		}
+	}
+	if s.empty() {
+		return nil, fmt.Errorf("script %q: defines no recognised entry point (expected one of %v)",
+			name, recognisedEntryPoints)
+	}
+	return s, nil
 }
 
-// Call invokes bail() once with the given response handle. Three outcomes:
+func (s *Script) empty() bool {
+	return s.bail == nil
+}
+
+// HasBail reports whether the script defines a bail(r) function.
+func (s *Script) HasBail() bool { return s != nil && s.bail != nil }
+
+// CallBail invokes bail() once with a fresh response handle. Outcomes:
 //
-//   - reason != "":  script returned a non-empty string → caller should bail.
+//   - reason != "":  bail with that reason.
 //   - err != nil:    script raised / timed out / blew the step budget.
-//     Caller should disable the script for the rest of the request.
 //   - reason == "" && err == nil: continue.
 //
-// Any non-None / non-string return value is treated as continue plus a
-// warning log — scripts should always return None or string.
-func (s *BailScript) Call(ctx context.Context, status int, headers map[string][]string, peek PeekFunc) (reason string, err error) {
+// Any non-None / non-string return is treated as continue plus a warning log.
+func (s *Script) CallBail(ctx context.Context, status int, headers map[string][]string, peek PeekFunc) (reason string, err error) {
+	if s == nil || s.bail == nil {
+		return "", nil
+	}
 	handle := &responseHandle{status: status, headers: headers, peek: peek}
-	ret, callErr := runScript(ctx, s.inner, handle)
+	ret, callErr := runCallable(ctx, s.name, "bail", s.bail, handle)
 	if callErr != nil {
 		return "", callErr
 	}
@@ -65,16 +93,16 @@ func (s *BailScript) Call(ctx context.Context, status int, headers map[string][]
 		return string(v), nil
 	default:
 		slog.Warn("bail script returned unexpected type, treating as continue",
-			"script", s.inner.name, "type", ret.Type())
+			"script", s.name, "type", ret.Type())
 		return "", nil
 	}
 }
 
+// ── responseHandle: the `r` value exposed to bail() ────────────────────────
+
 // PeekFunc returns up to n bytes from the start of the currently buffered
 // upstream prefix. If n < 0, returns the entire buffer.
 type PeekFunc func(n int) []byte
-
-// ── responseHandle: the `r` value exposed to bail() ────────────────────────
 
 type responseHandle struct {
 	status  int

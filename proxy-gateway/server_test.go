@@ -22,7 +22,7 @@ var testSource = proxykit.HandlerFunc(func(_ context.Context, _ *proxykit.Reques
 // ---------------------------------------------------------------------------
 
 func TestParseJSONCredsPopulatesContext(t *testing.T) {
-	h := ParseJSONCreds(proxykit.HandlerFunc(func(ctx context.Context, _ *proxykit.Request) (*proxykit.Result, error) {
+	h := ParseJSONCreds(nil, proxykit.HandlerFunc(func(ctx context.Context, _ *proxykit.Request) (*proxykit.Result, error) {
 		if getSet(ctx) != "res" {
 			t.Fatalf("expected set=res, got %q", getSet(ctx))
 		}
@@ -45,7 +45,7 @@ func TestParseJSONCredsPopulatesContext(t *testing.T) {
 
 func TestParseJSONCredsTopLevelSeedStableForSameUsername(t *testing.T) {
 	var gotSeed1, gotSeed2 uint64
-	h := ParseJSONCreds(proxykit.HandlerFunc(func(ctx context.Context, _ *proxykit.Request) (*proxykit.Result, error) {
+	h := ParseJSONCreds(nil, proxykit.HandlerFunc(func(ctx context.Context, _ *proxykit.Request) (*proxykit.Result, error) {
 		gotSeed1 = utils.GetTopLevelSeed(ctx)
 		return proxykit.Resolved(testProxy), nil
 	}))
@@ -53,7 +53,7 @@ func TestParseJSONCredsTopLevelSeedStableForSameUsername(t *testing.T) {
 		RawUsername: `{"set":"res","minutes":5,"session_params":{"app":"x"}}`,
 	})
 
-	h2 := ParseJSONCreds(proxykit.HandlerFunc(func(ctx context.Context, _ *proxykit.Request) (*proxykit.Result, error) {
+	h2 := ParseJSONCreds(nil, proxykit.HandlerFunc(func(ctx context.Context, _ *proxykit.Request) (*proxykit.Result, error) {
 		gotSeed2 = utils.GetTopLevelSeed(ctx)
 		return proxykit.Resolved(testProxy), nil
 	}))
@@ -67,7 +67,7 @@ func TestParseJSONCredsTopLevelSeedStableForSameUsername(t *testing.T) {
 
 func TestParseJSONCredsDifferentMetaDifferentSeed(t *testing.T) {
 	var gotSeed1, gotSeed2 uint64
-	h := ParseJSONCreds(proxykit.HandlerFunc(func(ctx context.Context, _ *proxykit.Request) (*proxykit.Result, error) {
+	h := ParseJSONCreds(nil, proxykit.HandlerFunc(func(ctx context.Context, _ *proxykit.Request) (*proxykit.Result, error) {
 		gotSeed1 = utils.GetTopLevelSeed(ctx)
 		return proxykit.Resolved(testProxy), nil
 	}))
@@ -75,7 +75,7 @@ func TestParseJSONCredsDifferentMetaDifferentSeed(t *testing.T) {
 		RawUsername: `{"set":"res","minutes":5,"session_params":{"user":"alice"}}`,
 	})
 
-	h2 := ParseJSONCreds(proxykit.HandlerFunc(func(ctx context.Context, _ *proxykit.Request) (*proxykit.Result, error) {
+	h2 := ParseJSONCreds(nil, proxykit.HandlerFunc(func(ctx context.Context, _ *proxykit.Request) (*proxykit.Result, error) {
 		gotSeed2 = utils.GetTopLevelSeed(ctx)
 		return proxykit.Resolved(testProxy), nil
 	}))
@@ -88,21 +88,21 @@ func TestParseJSONCredsDifferentMetaDifferentSeed(t *testing.T) {
 }
 
 func TestParseJSONCredsRejectsEmptyUsername(t *testing.T) {
-	h := ParseJSONCreds(testSource)
+	h := ParseJSONCreds(nil, testSource)
 	if _, err := h.Resolve(context.Background(), &proxykit.Request{}); err == nil {
 		t.Fatal("expected error")
 	}
 }
 
 func TestParseJSONCredsRejectsInvalidJSON(t *testing.T) {
-	h := ParseJSONCreds(testSource)
+	h := ParseJSONCreds(nil, testSource)
 	if _, err := h.Resolve(context.Background(), &proxykit.Request{RawUsername: "notjson"}); err == nil {
 		t.Fatal("expected error")
 	}
 }
 
 func TestParseJSONCredsRejectsMissingSet(t *testing.T) {
-	h := ParseJSONCreds(testSource)
+	h := ParseJSONCreds(nil, testSource)
 	if _, err := h.Resolve(context.Background(), &proxykit.Request{
 		RawUsername: `{"minutes":0,"session_params":{}}`,
 	}); err == nil {
@@ -153,7 +153,7 @@ func TestPasswordAuthDisabledWhenEmpty(t *testing.T) {
 
 func TestFullPipeline(t *testing.T) {
 	sm := utils.NewSessionManager(testSource)
-	pipeline := PasswordAuth("pw", ParseJSONCreds(sm))
+	pipeline := PasswordAuth("pw", ParseJSONCreds(nil, sm))
 
 	req := &proxykit.Request{
 		RawUsername: `{"set":"test","minutes":5,"session_params":{}}`,
@@ -189,7 +189,7 @@ func TestFullPipelineZeroTTLNoAffinity(t *testing.T) {
 		return proxykit.Resolved(&proxykit.Proxy{Host: "host", Port: uint16(counter)}), nil
 	})
 
-	pipeline := ParseJSONCreds(utils.NewSessionManager(source))
+	pipeline := ParseJSONCreds(nil, utils.NewSessionManager(source))
 
 	r1, _ := pipeline.Resolve(context.Background(), &proxykit.Request{
 		RawUsername: `{"set":"test","minutes":0,"session_params":{}}`,
@@ -209,7 +209,7 @@ func TestFullPipelineSeedFlowsToSource(t *testing.T) {
 		return proxykit.Resolved(testProxy), nil
 	})
 
-	pipeline := ParseJSONCreds(utils.NewSessionManager(source))
+	pipeline := ParseJSONCreds(nil, utils.NewSessionManager(source))
 	pipeline.Resolve(context.Background(), &proxykit.Request{
 		RawUsername: `{"set":"test","minutes":5,"session_params":{}}`,
 	})
@@ -228,7 +228,7 @@ func TestFullPipelineNilSeedWithoutAffinity(t *testing.T) {
 		return proxykit.Resolved(testProxy), nil
 	})
 
-	pipeline := ParseJSONCreds(utils.NewSessionManager(source))
+	pipeline := ParseJSONCreds(nil, utils.NewSessionManager(source))
 	pipeline.Resolve(context.Background(), &proxykit.Request{
 		RawUsername: `{"set":"test","minutes":0,"session_params":{}}`,
 	})
@@ -351,12 +351,12 @@ func TestRotateNowChangesSeed(t *testing.T) {
 	})
 
 	sm := utils.NewSessionManager(source)
-	pipeline := ParseJSONCreds(sm)
+	pipeline := ParseJSONCreds(nil, sm)
 
 	username := `{"set":"test","minutes":60,"session_params":{}}`
 	pipeline.Resolve(context.Background(), &proxykit.Request{RawUsername: username})
 
-	u, _ := ParseUsername(username)
+	u, _ := ParseUsername(username, nil)
 	seed := u.SessionParams.Seed()
 	info := sm.GetSession(seed)
 	if info == nil {

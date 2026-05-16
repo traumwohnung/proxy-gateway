@@ -114,7 +114,7 @@ func TestUsageConnTracker_CloseEmitsFailureReasonEvenAtZeroBytes(t *testing.T) {
 }
 
 func TestTrackUsageMiddleware_NilTrackerIsNoop(t *testing.T) {
-	pipeline := ParseJSONCreds(trackUsage(nil, nil, testProxySource()))
+	pipeline := ParseJSONCreds(nil, trackUsage(nil, nil, testProxySource()))
 	result, err := pipeline.Resolve(context.Background(), testProxyRequest("residential", ""))
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
@@ -126,7 +126,7 @@ func TestTrackUsageMiddleware_NilTrackerIsNoop(t *testing.T) {
 
 func TestTrackUsageMiddleware_AttachesConnTrackerWithHash(t *testing.T) {
 	tracker := &UsageTracker{client: nil}
-	pipeline := ParseJSONCreds(trackUsage(tracker, nil, testProxySource()))
+	pipeline := ParseJSONCreds(nil, trackUsage(tracker, nil, testProxySource()))
 	result, err := pipeline.Resolve(context.Background(), testProxyRequest("residential", `{"user":"alice"}`))
 	if err != nil {
 		t.Fatalf("resolve: %v", err)

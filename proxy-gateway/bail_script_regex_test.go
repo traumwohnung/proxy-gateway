@@ -178,7 +178,7 @@ def bail(r):
     return None
 `
 	s, _ := Compile("late", src)
-	got := Apply(context.Background(), s, resp, 4096, 0)
+	got := Apply(context.Background(), []*Script{s}, resp, 4096, 0)
 	if got.Header.Get(HeaderBailScriptOutput) != "have_blob" {
 		t.Fatalf("header=%q", got.Header.Get(HeaderBailScriptOutput))
 	}

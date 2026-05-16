@@ -31,7 +31,10 @@ type apiSessionInfo struct {
 }
 
 func toAPISessionInfo(info *utils.SessionInfo) *apiSessionInfo {
-	u, _ := ParseUsername(info.Label)
+	// nil registry: admin display only needs the simple top-level fields.
+	// Script references in the label would fail to resolve, but the admin
+	// path only looks at session_params, never the scripts.
+	u, _ := ParseUsername(info.Label, nil)
 
 	set := ""
 	meta := map[string]interface{}{}
@@ -73,7 +76,9 @@ func bearerAuth(apiKey string, next http.HandlerFunc) http.HandlerFunc {
 func decodeBase64Username(encoded string) (*Username, error) {
 	// The URL parameter is the base64 username produced by the client.
 	// ParseUsername already handles base64 → JSON decoding.
-	return ParseUsername(encoded)
+	// nil registry: admin uses this only to read session_params; refs in
+	// the script chain don't matter here.
+	return ParseUsername(encoded, nil)
 }
 
 // ---------------------------------------------------------------------------
