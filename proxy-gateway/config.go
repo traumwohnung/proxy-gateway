@@ -41,23 +41,23 @@ type ProxySetConfig struct {
 	ProxyingIO   *utils.ProxyingIOConfig   `toml:"proxyingio"   yaml:"proxyingio"   json:"proxyingio"`
 	Webshare     *utils.WebshareConfig     `toml:"webshare"     yaml:"webshare"     json:"webshare"`
 
-	// ResponseScript is an optional Starlark source applied to every MITM
+	// BailScript is an optional Starlark source applied to every MITM
 	// response on this proxy set, unless overridden by the per-request
-	// username's response_script field. Compiled at config load; an invalid
+	// username's bail_script field. Compiled at config load; an invalid
 	// script fails startup.
-	ResponseScript string `toml:"response_script" yaml:"response_script" json:"response_script"`
+	BailScript string `toml:"bail_script" yaml:"bail_script" json:"bail_script"`
 
-	// compiledScript holds the pre-compiled ResponseScript so we don't pay
-	// parse cost per request. Populated by LoadConfig.
-	compiledScript *utils.Script `toml:"-" yaml:"-" json:"-"`
+	// compiledBail holds the pre-compiled BailScript so we don't pay parse
+	// cost per request. Populated by LoadConfig.
+	compiledBail *utils.BailScript `toml:"-" yaml:"-" json:"-"`
 }
 
-// CompiledScript returns the per-set default response script, or nil if none.
-func (p *ProxySetConfig) CompiledScript() *utils.Script {
+// CompiledBail returns the per-set default bail script, or nil if none.
+func (p *ProxySetConfig) CompiledBail() *utils.BailScript {
 	if p == nil {
 		return nil
 	}
-	return p.compiledScript
+	return p.compiledBail
 }
 
 // LoadConfig reads and parses a TOML, YAML, or JSON config file.
@@ -81,18 +81,18 @@ func LoadConfig(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parsing config %s: %w", path, err)
 	}
-	// Pre-compile per-set response scripts so config errors fail at boot,
+	// Pre-compile per-set bail scripts so config errors fail at boot,
 	// not on the first matching request.
 	for i := range cfg.ProxySets {
 		ps := &cfg.ProxySets[i]
-		if ps.ResponseScript == "" {
+		if ps.BailScript == "" {
 			continue
 		}
-		s, cerr := utils.Compile("config:"+ps.Name, ps.ResponseScript)
+		s, cerr := utils.Compile("config:"+ps.Name, ps.BailScript)
 		if cerr != nil {
-			return nil, fmt.Errorf("proxy_set %q response_script: %w", ps.Name, cerr)
+			return nil, fmt.Errorf("proxy_set %q bail_script: %w", ps.Name, cerr)
 		}
-		ps.compiledScript = s
+		ps.compiledBail = s
 	}
 	return cfg, nil
 }

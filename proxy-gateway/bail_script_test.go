@@ -14,58 +14,58 @@ import (
 	"proxy-kit/utils"
 )
 
-// ── ParseUsername: response_script field ───────────────────────────────────
+// ── ParseUsername: bail_script field ───────────────────────────────────────
 
-const validResponseScript = `def on_response(r): return r.passthrough()`
+const validBail = `def bail(r): return None`
 
-func TestParseUsername_ResponseScriptCompiled(t *testing.T) {
-	raw := `{"set":"res","minutes":0,"httpcloak":{"preset":"chrome-latest"},"response_script":"def on_response(r): return r.abort('x')"}`
+func TestParseUsername_BailScriptCompiled(t *testing.T) {
+	raw := `{"set":"res","minutes":0,"httpcloak":{"preset":"chrome-latest"},"bail_script":"def bail(r): return 'datadome'"}`
 	u, err := ParseUsername(raw)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if u.ResponseScript == nil {
+	if u.BailScript == nil {
 		t.Fatal("expected compiled script, got nil")
 	}
 }
 
-func TestParseUsername_ResponseScriptRequiresHttpcloak(t *testing.T) {
-	raw := `{"set":"res","response_script":"def on_response(r): return r.passthrough()"}`
+func TestParseUsername_BailScriptRequiresHttpcloak(t *testing.T) {
+	raw := `{"set":"res","bail_script":"def bail(r): return None"}`
 	_, err := ParseUsername(raw)
 	if err == nil || !strings.Contains(err.Error(), "requires httpcloak") {
 		t.Fatalf("want httpcloak-required error, got %v", err)
 	}
 }
 
-func TestParseUsername_ResponseScriptCompileErrorSurfaces(t *testing.T) {
-	raw := `{"set":"res","httpcloak":{"preset":"chrome-latest"},"response_script":"this is not starlark"}`
+func TestParseUsername_BailScriptCompileErrorSurfaces(t *testing.T) {
+	raw := `{"set":"res","httpcloak":{"preset":"chrome-latest"},"bail_script":"this is not starlark"}`
 	_, err := ParseUsername(raw)
-	if err == nil || !strings.Contains(err.Error(), "response_script") {
+	if err == nil || !strings.Contains(err.Error(), "bail_script") {
 		t.Fatalf("want script-compile error, got %v", err)
 	}
 }
 
-func TestParseUsername_NoResponseScriptIsOK(t *testing.T) {
+func TestParseUsername_NoBailScriptIsOK(t *testing.T) {
 	raw := `{"set":"res","minutes":0,"httpcloak":{"preset":"chrome-latest"}}`
 	u, err := ParseUsername(raw)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if u.ResponseScript != nil {
+	if u.BailScript != nil {
 		t.Fatal("want nil script when field absent")
 	}
 }
 
 // ── ParseJSONCreds: context propagation ────────────────────────────────────
 
-func TestParseJSONCreds_PutsScriptOnContext(t *testing.T) {
-	var seen *utils.Script
+func TestParseJSONCreds_PutsBailScriptOnContext(t *testing.T) {
+	var seen *utils.BailScript
 	h := ParseJSONCreds(proxykit.HandlerFunc(func(ctx context.Context, _ *proxykit.Request) (*proxykit.Result, error) {
-		seen = getResponseScript(ctx)
+		seen = getBailScript(ctx)
 		return &proxykit.Result{Proxy: &proxykit.Proxy{Host: "x", Port: 1}}, nil
 	}))
 	_, err := h.Resolve(context.Background(), &proxykit.Request{
-		RawUsername: `{"set":"res","httpcloak":{"preset":"chrome-latest"},"response_script":"` + validResponseScript + `"}`,
+		RawUsername: `{"set":"res","httpcloak":{"preset":"chrome-latest"},"bail_script":"` + validBail + `"}`,
 	})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
@@ -87,29 +87,29 @@ func writeConfig(t *testing.T, body string) (string, string) {
 	return dir, path
 }
 
-func TestLoadConfig_CompilesPerSetScript(t *testing.T) {
+func TestLoadConfig_CompilesPerSetBail(t *testing.T) {
 	body := `
 [[proxy_set]]
 name = "res"
 provider = "none"
-response_script = "def on_response(r): return r.passthrough()"
+bail_script = "def bail(r): return None"
 `
 	_, path := writeConfig(t, body)
 	cfg, err := LoadConfig(path)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if cfg.ProxySets[0].CompiledScript() == nil {
+	if cfg.ProxySets[0].CompiledBail() == nil {
 		t.Fatal("want compiled script")
 	}
 }
 
-func TestLoadConfig_BadScriptFailsBoot(t *testing.T) {
+func TestLoadConfig_BadBailFailsBoot(t *testing.T) {
 	body := `
 [[proxy_set]]
 name = "res"
 provider = "none"
-response_script = "this is not starlark"
+bail_script = "this is not starlark"
 `
 	_, path := writeConfig(t, body)
 	if _, err := LoadConfig(path); err == nil {
@@ -117,16 +117,16 @@ response_script = "this is not starlark"
 	}
 }
 
-func TestBuildServer_PerSetScriptInstallsResponseHook(t *testing.T) {
+func TestBuildServer_PerSetBailInstallsHook(t *testing.T) {
 	body := `
 [[proxy_set]]
 name = "res"
 provider = "none"
-response_script = """
-def on_response(r):
+bail_script = """
+def bail(r):
     if r.scan(b'BLOCK') >= 0:
-        return r.abort('blocked')
-    return r.passthrough()
+        return 'blocked'
+    return None
 """
 `
 	dir, path := writeConfig(t, body)
@@ -139,9 +139,6 @@ def on_response(r):
 		t.Fatalf("build: %v", err)
 	}
 
-	// Simulate a request landing on the per-set source: invoke the
-	// pipeline with a valid username (no per-call override), then exercise
-	// the ResponseHook on a synthetic response.
 	result, err := srv.Pipeline.Resolve(context.Background(), &proxykit.Request{
 		RawUsername: `{"set":"res","minutes":0,"httpcloak":{"preset":"chrome-latest"}}`,
 	})
@@ -152,21 +149,22 @@ def on_response(r):
 		t.Fatalf("expected ResponseHook from per-set default; result=%+v", result)
 	}
 
-	// Block path: body contains the marker → hook returns 499.
+	// Bail path: body contains the marker → hook returns same status with
+	// X-Bail-Reason header; body preserved up to bail point.
 	blocked := &http.Response{
 		StatusCode: 200,
 		Header:     http.Header{},
 		Body:       io.NopCloser(bytes.NewReader([]byte("xxBLOCKxx"))),
 	}
 	hooked := result.ResponseHook(blocked)
-	if hooked.StatusCode != 499 {
-		t.Fatalf("want 499, got %d", hooked.StatusCode)
+	if hooked.StatusCode != 200 {
+		t.Fatalf("status must be preserved, got %d", hooked.StatusCode)
 	}
-	if hooked.Header.Get("X-Gateway-Abort") != "blocked" {
-		t.Fatalf("missing X-Gateway-Abort=blocked, got %q", hooked.Header.Get("X-Gateway-Abort"))
+	if hooked.Header.Get(utils.HeaderBailReason) != "blocked" {
+		t.Fatalf("X-Bail-Reason=%q", hooked.Header.Get(utils.HeaderBailReason))
 	}
 
-	// Passthrough path: no marker → original status preserved, body intact.
+	// Passthrough path: no marker → original status + body intact.
 	ok := &http.Response{
 		StatusCode: 200,
 		Header:     http.Header{},
@@ -176,26 +174,28 @@ def on_response(r):
 	if hooked2.StatusCode != 200 {
 		t.Fatalf("want 200, got %d", hooked2.StatusCode)
 	}
+	if hooked2.Header.Get(utils.HeaderBailReason) != "" {
+		t.Fatalf("unexpected bail header on passthrough")
+	}
 	body2, _ := io.ReadAll(hooked2.Body)
 	if string(body2) != "clean payload" {
 		t.Fatalf("body=%q", body2)
 	}
 }
 
-func TestBuildServer_PerCallScriptOverridesPerSet(t *testing.T) {
-	// Per-set default would passthrough; per-call override aborts.
+func TestBuildServer_PerCallBailOverridesPerSet(t *testing.T) {
 	body := `
 [[proxy_set]]
 name = "res"
 provider = "none"
-response_script = "def on_response(r): return r.passthrough()"
+bail_script = "def bail(r): return None"
 `
 	dir, path := writeConfig(t, body)
 	cfg, _ := LoadConfig(path)
 	srv, _ := BuildServer(cfg, dir, "", nil)
 
-	override := `def on_response(r): return r.abort('override-fires')`
-	raw := `{"set":"res","minutes":0,"httpcloak":{"preset":"chrome-latest"},"response_script":` +
+	override := `def bail(r): return 'override-fires'`
+	raw := `{"set":"res","minutes":0,"httpcloak":{"preset":"chrome-latest"},"bail_script":` +
 		jsonString(override) + `}`
 
 	result, err := srv.Pipeline.Resolve(context.Background(), &proxykit.Request{RawUsername: raw})
@@ -209,12 +209,11 @@ response_script = "def on_response(r): return r.passthrough()"
 		StatusCode: 200, Header: http.Header{},
 		Body: io.NopCloser(bytes.NewReader([]byte("anything"))),
 	})
-	if hooked.StatusCode != 499 || hooked.Header.Get("X-Gateway-Abort") != "override-fires" {
-		t.Fatalf("override did not fire: status=%d abort=%q", hooked.StatusCode, hooked.Header.Get("X-Gateway-Abort"))
+	if hooked.Header.Get(utils.HeaderBailReason) != "override-fires" {
+		t.Fatalf("override did not fire: header=%q", hooked.Header.Get(utils.HeaderBailReason))
 	}
 }
 
-// jsonString is the smallest possible json.Marshal for a string.
 func jsonString(s string) string {
 	var b strings.Builder
 	b.WriteByte('"')

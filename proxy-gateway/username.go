@@ -17,12 +17,12 @@ import (
 //	{"set":"direct", "httpcloak":{"preset":"chrome-latest"}}
 //	{"set":"direct", "httpcloak":{"preset":"chrome-latest","ja3":"771,...","akamai":"1:65536|..."}}
 type Username struct {
-	SessionParams  SessionParams
-	Minutes        int
-	Httpcloak      *utils.HTTPCloakSpec   // optional; triggers MITM + TLS fingerprint spoofing
-	SessionMeta    map[string]interface{} // optional; informational only — never affects session/IP
-	ResponseScript *utils.Script          // optional; per-request MITM response filter (Starlark)
-	Raw            string                 // original JSON string, stored as session label
+	SessionParams SessionParams
+	Minutes       int
+	Httpcloak     *utils.HTTPCloakSpec   // optional; triggers MITM + TLS fingerprint spoofing
+	SessionMeta   map[string]interface{} // optional; informational only — never affects session/IP
+	BailScript    *utils.BailScript      // optional; per-request MITM bail filter (Starlark)
+	Raw           string                 // original JSON string, stored as session label
 }
 
 // ParseUsername parses a raw JSON username string.
@@ -40,12 +40,12 @@ func ParseUsername(raw string) (*Username, error) {
 		jsonBytes = decoded
 	}
 	var j struct {
-		Set            string                 `json:"set"`
-		Minutes        int                    `json:"minutes"`
-		SessionParams  map[string]interface{} `json:"session_params"`
-		SessionMeta    map[string]interface{} `json:"session_meta"`
-		Httpcloak      json.RawMessage        `json:"httpcloak"`
-		ResponseScript string                 `json:"response_script"`
+		Set           string                 `json:"set"`
+		Minutes       int                    `json:"minutes"`
+		SessionParams map[string]interface{} `json:"session_params"`
+		SessionMeta   map[string]interface{} `json:"session_meta"`
+		Httpcloak     json.RawMessage        `json:"httpcloak"`
+		BailScript    string                 `json:"bail_script"`
 	}
 	if err := json.Unmarshal(jsonBytes, &j); err != nil {
 		return nil, fmt.Errorf("username is not valid JSON: %w", err)
@@ -57,23 +57,23 @@ func ParseUsername(raw string) (*Username, error) {
 	if err != nil {
 		return nil, fmt.Errorf("httpcloak: %w", err)
 	}
-	var script *utils.Script
-	if j.ResponseScript != "" {
+	var script *utils.BailScript
+	if j.BailScript != "" {
 		if spec == nil {
-			return nil, fmt.Errorf("response_script requires httpcloak to be set (MITM required)")
+			return nil, fmt.Errorf("bail_script requires httpcloak to be set (MITM required)")
 		}
-		script, err = utils.Compile("username", j.ResponseScript)
+		script, err = utils.Compile("username", j.BailScript)
 		if err != nil {
-			return nil, fmt.Errorf("response_script: %w", err)
+			return nil, fmt.Errorf("bail_script: %w", err)
 		}
 	}
 	return &Username{
-		SessionParams:  SessionParams{Set: j.Set, Meta: j.SessionParams},
-		Minutes:        j.Minutes,
-		Httpcloak:      spec,
-		SessionMeta:    j.SessionMeta,
-		ResponseScript: script,
-		Raw:            string(jsonBytes),
+		SessionParams: SessionParams{Set: j.Set, Meta: j.SessionParams},
+		Minutes:       j.Minutes,
+		Httpcloak:     spec,
+		SessionMeta:   j.SessionMeta,
+		BailScript:    script,
+		Raw:           string(jsonBytes),
 	}, nil
 }
 
@@ -88,7 +88,7 @@ const (
 	ctxHTTPCloakPreset
 	ctxMinutes
 	ctxSessionMetaJSON
-	ctxResponseScript
+	ctxBailScript
 )
 
 // Note: the canonical session params JSON and provider name live on the
@@ -139,17 +139,17 @@ func getHTTPCloakSpec(ctx context.Context) *utils.HTTPCloakSpec {
 	return v
 }
 
-// withResponseScript stores the per-request compiled response-filter script
+// withBailScript stores the per-request compiled bail-filter script
 // (from username override or per-set default) on the context.
-func withResponseScript(ctx context.Context, script *utils.Script) context.Context {
+func withBailScript(ctx context.Context, script *utils.BailScript) context.Context {
 	if script == nil {
 		return ctx
 	}
-	return context.WithValue(ctx, ctxResponseScript, script)
+	return context.WithValue(ctx, ctxBailScript, script)
 }
 
-func getResponseScript(ctx context.Context) *utils.Script {
-	v, _ := ctx.Value(ctxResponseScript).(*utils.Script)
+func getBailScript(ctx context.Context) *utils.BailScript {
+	v, _ := ctx.Value(ctxBailScript).(*utils.BailScript)
 	return v
 }
 
@@ -183,7 +183,7 @@ func ParseJSONCreds(next proxykit.Handler) proxykit.Handler {
 		ctx = utils.WithProxysetName(ctx, u.SessionParams.Set)
 		ctx = withSessionMetaJSON(ctx, MetaCanonicalJSON(u.SessionMeta))
 		ctx = withHTTPCloakSpec(ctx, u.Httpcloak)
-		ctx = withResponseScript(ctx, u.ResponseScript)
+		ctx = withBailScript(ctx, u.BailScript)
 
 		return next.Resolve(ctx, req)
 	})

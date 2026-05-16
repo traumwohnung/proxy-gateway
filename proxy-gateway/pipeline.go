@@ -114,10 +114,10 @@ func buildProxysetRouter(cfg *Config, configDir string) (proxykit.Handler, error
 		}
 		// Tag the source with its provider type so emission downstream knows
 		// which upstream produced this binding. Captured by value so each set
-		// gets its own closure. defaultScript is the per-set fallback used
-		// when the username doesn't carry response_script.
+		// gets its own closure. defaultBail is the per-set fallback used
+		// when the username doesn't carry bail_script.
 		provider := raw.SourceType
-		defaultScript := raw.compiledScript
+		defaultBail := raw.compiledBail
 		baseSrc := src
 		sources[raw.Name] = proxykit.HandlerFunc(func(ctx context.Context, req *proxykit.Request) (*proxykit.Result, error) {
 			ctx = utils.WithProviderName(ctx, provider)
@@ -127,9 +127,9 @@ func buildProxysetRouter(cfg *Config, configDir string) (proxykit.Handler, error
 			}
 			// Resolve the script: per-call override (from username) > per-set
 			// default > none. Only wires a hook when one is present.
-			script := getResponseScript(ctx)
+			script := getBailScript(ctx)
 			if script == nil {
-				script = defaultScript
+				script = defaultBail
 			}
 			if script != nil {
 				prev := result.ResponseHook
@@ -138,7 +138,7 @@ func buildProxysetRouter(cfg *Config, configDir string) (proxykit.Handler, error
 					if prev != nil {
 						resp = prev(resp)
 					}
-					return utils.ApplyScript(hookCtx, script, resp, 0, 0)
+					return utils.Apply(hookCtx, script, resp, 0, 0)
 				}
 			}
 			return result, nil
