@@ -70,9 +70,11 @@ func (s *Script) empty() bool {
 // HasResponseBailing reports whether the script defines a bail(r) function.
 func (s *Script) HasResponseBailing() bool { return s != nil && s.responseBailing != nil }
 
-// CallResponseBailing invokes bail() once with a fresh response handle. Outcomes:
+// CallResponseBailing invokes response_bailing() once with a fresh response
+// handle. Outcomes:
 //
-//   - reason != "":  bail with that reason.
+//   - reason != "":  bail with that reason. Client receives the buffered
+//     prefix the gateway pulled before the bail fired.
 //   - err != nil:    script raised / timed out / blew the step budget.
 //   - reason == "" && err == nil: continue.
 //

@@ -1,6 +1,5 @@
 // Script registry — name → *Script lookup used by ParseUsername to resolve
-// references in the username's `scripts` array, and by config loading to
-// resolve a proxy_set's `default_scripts` list.
+// references in the username's `mitm.scripts` array.
 package main
 
 // ScriptRegistry is the interface ParseUsername needs to dereference named

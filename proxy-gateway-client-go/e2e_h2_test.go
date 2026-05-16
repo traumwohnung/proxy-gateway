@@ -20,7 +20,7 @@ func TestE2E_HTTPCloak_H2_MITM(t *testing.T) {
 	gatewayHTTPAddr, stopGW := startMITMGateway(t)
 	defer stopGW()
 
-	usernameJSON := `{"set":"direct","httpcloak":"chrome-latest"}`
+	usernameJSON := `{"set":"direct","mitm":{"httpcloak":"chrome-latest"}}`
 	username := base64.StdEncoding.EncodeToString([]byte(usernameJSON))
 
 	proxyRawURL := "http://" + gatewayHTTPAddr

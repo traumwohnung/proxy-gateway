@@ -8,6 +8,10 @@ import (
 )
 
 // UsernameParams holds the decoded components of a proxy-gateway username.
+//
+// MITM mode is opt-in via the MITM flag (or implicitly by setting HTTPCloak
+// or Scripts). When MITM is enabled but HTTPCloak is nil, the gateway
+// defaults to the chrome-latest preset.
 type UsernameParams struct {
 	// Set is the proxy set name — must match a [[proxy_set]] name in the server config.
 	Set string `json:"set"`
@@ -23,17 +27,84 @@ type UsernameParams struct {
 	// + different SessionMeta = same upstream IP. Carried through to the
 	// analytics service for filtering/grouping (tenant, campaign, request_id, …).
 	SessionMeta map[string]any `json:"session_meta,omitempty"`
-	// HTTPCloak enables TLS fingerprint spoofing via MITM. When set, the
-	// proxy-gateway intercepts the TLS connection and re-establishes it with
-	// a browser-like fingerprint.
-	HTTPCloak *HTTPCloakSpec `json:"httpcloak,omitempty"`
+	// MITM toggles MITM mode. Marshaled as the presence of the `mitm` wire
+	// object. Setting HTTPCloak or Scripts implicitly enables MITM as well.
+	MITM bool `json:"-"`
+	// HTTPCloak enables TLS fingerprint spoofing. Wire form lives under
+	// `mitm.httpcloak`. Setting this implies MITM is on.
+	HTTPCloak *HTTPCloakSpec `json:"-"`
 	// Scripts is the ordered chain of Starlark scripts evaluated server-side
 	// on this request's MITM'd response. Each entry is either a reference
 	// to a named [[script]] declared in the gateway's config.toml, or an
-	// inline source. Requires HTTPCloak to be set (MITM only).
+	// inline source. Wire form lives under `mitm.scripts`. Setting this
+	// implies MITM is on.
 	//
 	// See the gateway's SCRIPTS.md for the full guide.
-	Scripts []ScriptEntry `json:"scripts,omitempty"`
+	Scripts []ScriptEntry `json:"-"`
+}
+
+// mitmWire is the on-wire `mitm` object embedded inside a username payload.
+type mitmWire struct {
+	HTTPCloak *HTTPCloakSpec `json:"httpcloak,omitempty"`
+	Scripts   []ScriptEntry  `json:"scripts,omitempty"`
+}
+
+// usernameWire mirrors UsernameParams' on-wire shape, with `mitm` scoped
+// around httpcloak + scripts.
+type usernameWire struct {
+	Set           string         `json:"set"`
+	Minutes       int            `json:"minutes,omitempty"`
+	SessionParams map[string]any `json:"session_params,omitempty"`
+	SessionMeta   map[string]any `json:"session_meta,omitempty"`
+	MITM          *mitmWire      `json:"mitm,omitempty"`
+}
+
+// MarshalJSON emits the wire form, scoping httpcloak + scripts inside `mitm`.
+// `mitm` is emitted whenever the configuration enables MITM in any way —
+// either explicitly via MITM=true, or implicitly by carrying a non-nil
+// HTTPCloak or a non-empty Scripts slice.
+func (p UsernameParams) MarshalJSON() ([]byte, error) {
+	w := usernameWire{
+		Set:           p.Set,
+		Minutes:       p.Minutes,
+		SessionParams: p.SessionParams,
+		SessionMeta:   p.SessionMeta,
+	}
+	if p.MITM || p.HTTPCloak != nil || len(p.Scripts) > 0 {
+		w.MITM = &mitmWire{HTTPCloak: p.HTTPCloak, Scripts: p.Scripts}
+	}
+	return json.Marshal(w)
+}
+
+// UnmarshalJSON reads the wire form. Presence of `mitm` toggles MITM=true.
+// Top-level `httpcloak`/`scripts` keys are rejected to match the gateway.
+func (p *UsernameParams) UnmarshalJSON(data []byte) error {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(data, &top); err != nil {
+		return err
+	}
+	if _, ok := top["httpcloak"]; ok {
+		return errors.New("top-level 'httpcloak' is no longer accepted — move it inside the 'mitm' object")
+	}
+	if _, ok := top["scripts"]; ok {
+		return errors.New("top-level 'scripts' is no longer accepted — move it inside the 'mitm' object")
+	}
+	var w usernameWire
+	if err := json.Unmarshal(data, &w); err != nil {
+		return err
+	}
+	*p = UsernameParams{
+		Set:           w.Set,
+		Minutes:       w.Minutes,
+		SessionParams: w.SessionParams,
+		SessionMeta:   w.SessionMeta,
+	}
+	if w.MITM != nil {
+		p.MITM = true
+		p.HTTPCloak = w.MITM.HTTPCloak
+		p.Scripts = w.MITM.Scripts
+	}
+	return nil
 }
 
 // ScriptEntry is one entry in a username's `scripts` chain. Wire form is a

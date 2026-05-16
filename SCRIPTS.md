@@ -21,13 +21,13 @@ whatever was already received, add one informational response header.
 
 ## Prerequisites
 
-- The request must opt into MITM by including `httpcloak` in its username.
-  Scripts can only see plaintext; the gateway is a CONNECT tunnel without
-  `httpcloak`. A `scripts` array set without `httpcloak` fails at username
-  parse.
-- Scripts can be attached **per request** (in the username's `scripts`
-  array) or **per proxy-set** (in `config.toml` via `default_scripts`).
-  Per-request REPLACES the per-set chain when present.
+- The request must opt into MITM by including a `mitm` object in its
+  username. Scripts can only see plaintext; the gateway is a CONNECT tunnel
+  without `mitm`. Top-level `httpcloak` / `scripts` keys are rejected — they
+  must be nested inside `mitm`.
+- An empty `mitm: {}` enables MITM with the default `chrome-latest`
+  httpcloak fingerprint. Omit `mitm.httpcloak` to keep that default.
+- Scripts are attached **per request** via `mitm.scripts` in the username.
 
 ## Defining named scripts in config
 
@@ -56,14 +56,12 @@ def response_bailing(r):
 [[proxy_set]]
 name = "residential"
 provider = "proxyingio"
-default_scripts = ["antibot", "skip_large"]
 ```
 
 - All `[[script]]` entries are compiled at config load. Bad source → boot fail.
 - A script that defines no recognised entry point (e.g. `response_bailing`) is rejected
   at compile time. This catches typos like `def ball(r): ...`.
-- `default_scripts` lists names. Unknown names → boot fail.
-- Order in `default_scripts` is the order they're invoked.
+- Named scripts are referenced from the per-request `mitm.scripts` array.
 
 ## Per-request script chain in the username
 
@@ -73,12 +71,14 @@ default_scripts = ["antibot", "skip_large"]
   "minutes": 1,
   "session_params": { "platform": "immowelt", "usecase": "scraping" },
   "session_meta":   { "action": "scrape_expose" },
-  "httpcloak":      { "preset": "chrome-latest" },
-  "scripts": [
-    "antibot",
-    { "kind": "source", "source": "def response_bailing(r):\n    if r.scan(b'<title>') >= 0:\n        return 'has_title'" },
-    { "kind": "ref", "name": "skip_large" }
-  ]
+  "mitm": {
+    "httpcloak": { "preset": "chrome-latest" },
+    "scripts": [
+      "antibot",
+      { "kind": "source", "source": "def response_bailing(r):\n    if r.scan(b'<title>') >= 0:\n        return 'has_title'" },
+      { "kind": "ref", "name": "skip_large" }
+    ]
+  }
 }
 ```
 
@@ -93,9 +93,8 @@ Each entry is one of:
 - Inline source ≤ 32 KiB, same compile rules as named scripts.
 - Refs require a registry — username parsing fails if a ref appears with
   no `[[script]]` entries on the gateway.
-- Setting `scripts` REPLACES the per-set `default_scripts`. To extend a
-  per-set chain, include the named refs explicitly:
-  `"scripts": ["antibot", "skip_large", { "kind": "source", "source": "..." }]`.
+- Omitting `mitm.httpcloak` while supplying `mitm.scripts` is fine — the
+  gateway falls back to the chrome-latest preset.
 
 ## Lifecycle of the response_bailing chain
 
@@ -299,7 +298,14 @@ def response_bailing(r):
 [[proxy_set]]
 name = "residential"
 provider = "proxyingio"
-default_scripts = ["skip_4xx", "antibot_full_html_scan"]
+```
+
+Reference both scripts in the per-request `mitm.scripts` chain:
+
+```json
+"mitm": {
+  "scripts": ["skip_4xx", "antibot_full_html_scan"]
+}
 ```
 
 The cheap `skip_4xx` filter runs first on every chunk; if a status check
@@ -308,10 +314,12 @@ bails, the heavier regex scan never runs.
 ### Per-request: stack a global filter with a one-off rule
 
 ```json
-"scripts": [
-  "antibot",
-  { "kind": "source", "source": "def response_bailing(r):\n    if r.scan(b'<error>') >= 0:\n        return 'error_marker'" }
-]
+"mitm": {
+  "scripts": [
+    "antibot",
+    { "kind": "source", "source": "def response_bailing(r):\n    if r.scan(b'<error>') >= 0:\n        return 'error_marker'" }
+  ]
+}
 ```
 
 ## What you can't do

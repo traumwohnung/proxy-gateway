@@ -104,7 +104,7 @@ func TestScriptEntry_Unmarshal_UnknownKindErrors(t *testing.T) {
 	}
 }
 
-// ── ProxyConfiguration.Scripts / ScriptRef / ScriptSource / ClearScripts ──
+// ── ProxyConfiguration.Scripts / ScriptRef / ScriptSource / NoMITM ───────
 
 func TestProxyConfiguration_ScriptsAppend(t *testing.T) {
 	c := proxygatewayclient.NewProxyConfiguration("set").
@@ -153,14 +153,32 @@ func TestProxyConfiguration_CloneCopiesScripts(t *testing.T) {
 	}
 }
 
-func TestProxyConfiguration_ClearScripts(t *testing.T) {
+func TestProxyConfiguration_NoMITMClearsAll(t *testing.T) {
 	c := proxygatewayclient.NewProxyConfiguration("set").
 		ScriptRef("antibot").
 		ScriptRef("more").
-		ClearScripts()
+		NoMITM()
 	u, _ := c.BuildUsername()
 	p, _ := proxygatewayclient.ParseUsername(u)
 	if len(p.Scripts) != 0 {
-		t.Fatalf("want 0 scripts after Clear, got %d", len(p.Scripts))
+		t.Fatalf("want 0 scripts after NoMITM, got %d", len(p.Scripts))
+	}
+	if p.MITM {
+		t.Fatalf("want MITM=false after NoMITM")
+	}
+	if p.HTTPCloak != nil {
+		t.Fatalf("want HTTPCloak=nil after NoMITM")
+	}
+}
+
+func TestProxyConfiguration_MITMEmits(t *testing.T) {
+	c := proxygatewayclient.NewProxyConfiguration("set").MITM()
+	u, _ := c.BuildUsername()
+	p, err := proxygatewayclient.ParseUsername(u)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !p.MITM {
+		t.Fatalf("want MITM=true after .MITM()")
 	}
 }

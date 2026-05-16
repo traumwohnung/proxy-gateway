@@ -27,9 +27,8 @@ type Config struct {
 	MITMCAKey  string `toml:"mitm_ca_key"  yaml:"mitm_ca_key"  json:"mitm_ca_key"`
 
 	// Scripts is the registry of named Starlark scripts. Each entry is
-	// compiled at config load; references from `default_scripts` on a
-	// proxy_set or from the `scripts` array in a username's JSON are looked
-	// up here.
+	// compiled at config load; references from the `mitm.scripts` array in
+	// a username's JSON are looked up here.
 	Scripts []ScriptConfig `toml:"script" yaml:"script" json:"script"`
 
 	ProxySets []ProxySetConfig `toml:"proxy_set" yaml:"proxy_set" json:"proxy_set"`
@@ -49,9 +48,8 @@ func (c *Config) Registry() ScriptRegistry {
 }
 
 // ScriptConfig declares one named Starlark script. The name is referenced
-// from `default_scripts` on proxy_set entries and from `scripts` arrays in
-// usernames. The source is compiled once at config load; bad source fails
-// the gateway at boot.
+// from `mitm.scripts` arrays in usernames. The source is compiled once at
+// config load; bad source fails the gateway at boot.
 type ScriptConfig struct {
 	Name   string `toml:"name"   yaml:"name"   json:"name"`
 	Source string `toml:"source" yaml:"source" json:"source"`
@@ -67,28 +65,10 @@ type ProxySetConfig struct {
 	Geonode      *utils.GeonodeConfig      `toml:"geonode"      yaml:"geonode"      json:"geonode"`
 	ProxyingIO   *utils.ProxyingIOConfig   `toml:"proxyingio"   yaml:"proxyingio"   json:"proxyingio"`
 	Webshare     *utils.WebshareConfig     `toml:"webshare"     yaml:"webshare"     json:"webshare"`
-
-	// DefaultScripts is the ordered chain of named scripts to apply when
-	// the per-request username doesn't carry its own `scripts` array. Names
-	// must resolve to entries in the top-level [[script]] table.
-	DefaultScripts []string `toml:"default_scripts" yaml:"default_scripts" json:"default_scripts"`
-
-	// resolvedDefaults holds the pre-resolved chain. Populated by LoadConfig.
-	resolvedDefaults []*Script `toml:"-" yaml:"-" json:"-"`
-}
-
-// ResolvedDefaults returns the per-set default chain, already resolved from
-// the script registry. Empty when no defaults are configured.
-func (p *ProxySetConfig) ResolvedDefaults() []*Script {
-	if p == nil {
-		return nil
-	}
-	return p.resolvedDefaults
 }
 
 // LoadConfig reads and parses a TOML, YAML, or JSON config file. It compiles
-// every named script and resolves each proxy_set's `default_scripts` list,
-// failing the boot on bad source or unknown references.
+// every named script, failing the boot on bad source.
 func LoadConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -125,22 +105,6 @@ func LoadConfig(path string) (*Config, error) {
 			return nil, fmt.Errorf("[[script]] %q: %w", sc.Name, cerr)
 		}
 		cfg.registry[sc.Name] = compiled
-	}
-
-	// Resolve each proxy_set's default_scripts list against the registry.
-	for i := range cfg.ProxySets {
-		ps := &cfg.ProxySets[i]
-		if len(ps.DefaultScripts) == 0 {
-			continue
-		}
-		ps.resolvedDefaults = make([]*Script, 0, len(ps.DefaultScripts))
-		for j, name := range ps.DefaultScripts {
-			s, ok := cfg.registry[name]
-			if !ok {
-				return nil, fmt.Errorf("proxy_set %q default_scripts[%d]: unknown script %q", ps.Name, j, name)
-			}
-			ps.resolvedDefaults = append(ps.resolvedDefaults, s)
-		}
 	}
 
 	return cfg, nil

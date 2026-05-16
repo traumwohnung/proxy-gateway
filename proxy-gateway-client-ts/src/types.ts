@@ -141,16 +141,23 @@ export interface BuildProxyUsernameOptions {
     sessionParams: SessionParams;
     /** Informational metadata. Does NOT affect IP selection. */
     sessionMeta?: SessionMeta;
-    /** Enable TLS fingerprint spoofing. */
+    /**
+     * Enable MITM mode explicitly. Setting `httpcloak` or `scripts` also
+     * enables MITM implicitly. When MITM is on and `httpcloak` is omitted,
+     * the gateway defaults to the chrome-latest preset.
+     */
+    mitm?: boolean;
+    /** TLS fingerprint spoofing spec. Setting this implicitly enables MITM. */
     httpcloak?: HTTPCloakSpec;
     /**
      * Ordered chain of Starlark scripts evaluated server-side on this
-     * request's MITM'd response. Each entry is either:
+     * request's MITM'd response. Setting this implicitly enables MITM.
+     * Each entry is either:
      *   - a bare string: shorthand reference to a named [[script]]
-     *   - `{ ref: "name" }`: explicit reference
-     *   - `{ source: "def response_bailing(r): ..." }`: inline source
+     *   - `{ kind: "ref", name }`: explicit reference
+     *   - `{ kind: "source", source }`: inline source
      *
-     * Requires `httpcloak` to be set. See SCRIPTS.md for the full guide.
+     * See SCRIPTS.md for the full guide.
      */
     scripts?: ScriptEntryInput[];
 }
@@ -189,11 +196,16 @@ export function buildProxyUsername(opts: BuildProxyUsernameOptions): string {
     if (opts.sessionMeta !== undefined && Object.keys(opts.sessionMeta).length > 0) {
         payload.session_meta = opts.sessionMeta;
     }
-    if (opts.httpcloak !== undefined) {
-        payload.httpcloak = opts.httpcloak;
-    }
-    if (opts.scripts !== undefined && opts.scripts.length > 0) {
-        payload.scripts = opts.scripts.map((s) => scriptEntryInputSchema.parse(s));
+    const mitmOn = opts.mitm === true || opts.httpcloak !== undefined || (opts.scripts !== undefined && opts.scripts.length > 0);
+    if (mitmOn) {
+        const mitm: Record<string, unknown> = {};
+        if (opts.httpcloak !== undefined) {
+            mitm.httpcloak = opts.httpcloak;
+        }
+        if (opts.scripts !== undefined && opts.scripts.length > 0) {
+            mitm.scripts = opts.scripts.map((s) => scriptEntryInputSchema.parse(s));
+        }
+        payload.mitm = mitm;
     }
     const json = JSON.stringify(payload);
     return btoa(json);
@@ -208,6 +220,7 @@ export function parseProxyUsername(username: string): {
     minutes: number;
     sessionParams: SessionParams;
     sessionMeta?: SessionMeta;
+    mitm?: boolean;
     httpcloak?: HTTPCloakSpec;
     scripts?: ScriptEntry[];
 } | null {
@@ -216,7 +229,11 @@ export function parseProxyUsername(username: string): {
         const obj = JSON.parse(json);
         if (typeof obj !== "object" || obj === null) return null;
 
-        const { set, minutes, session_params: sessionParams, session_meta: sessionMeta, httpcloak, scripts } = obj;
+        // Top-level httpcloak / scripts are no longer accepted — they must
+        // live inside the `mitm` object.
+        if ("httpcloak" in obj || "scripts" in obj) return null;
+
+        const { set, minutes, session_params: sessionParams, session_meta: sessionMeta, mitm } = obj;
         if (
             typeof set !== "string" ||
             typeof minutes !== "number" ||
@@ -234,6 +251,7 @@ export function parseProxyUsername(username: string): {
             minutes: number;
             sessionParams: SessionParams;
             sessionMeta?: SessionMeta;
+            mitm?: boolean;
             httpcloak?: HTTPCloakSpec;
             scripts?: ScriptEntry[];
         } = {
@@ -246,13 +264,18 @@ export function parseProxyUsername(username: string): {
             if (!metaResult.success) return null;
             result.sessionMeta = metaResult.data;
         }
-        if (httpcloak !== undefined) {
-            result.httpcloak = httpcloak;
-        }
-        if (Array.isArray(scripts)) {
-            const arrResult = z.array(scriptEntryInputSchema).safeParse(scripts);
-            if (!arrResult.success) return null;
-            result.scripts = arrResult.data;
+        if (mitm !== undefined && mitm !== null) {
+            if (typeof mitm !== "object") return null;
+            result.mitm = true;
+            const { httpcloak, scripts } = mitm as { httpcloak?: HTTPCloakSpec; scripts?: unknown };
+            if (httpcloak !== undefined) {
+                result.httpcloak = httpcloak;
+            }
+            if (Array.isArray(scripts)) {
+                const arrResult = z.array(scriptEntryInputSchema).safeParse(scripts);
+                if (!arrResult.success) return null;
+                result.scripts = arrResult.data;
+            }
         }
         return result;
     } catch {

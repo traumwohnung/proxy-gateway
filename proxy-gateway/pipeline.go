@@ -42,7 +42,7 @@ func BuildServer(cfg *Config, configDir string, proxyPassword string, tracker *U
 		return nil, err
 	}
 
-	conditionalMITM := utils.ConditionalFingerprintMITM(ca, getHTTPCloakSpec, inner)
+	conditionalMITM := utils.ConditionalMITM(ca, getHTTPCloakSpec, inner)
 	pipeline := PasswordAuth(proxyPassword, ParseJSONCreds(cfg.Registry(), conditionalMITM))
 
 	return &Server{
@@ -114,10 +114,8 @@ func buildProxysetRouter(cfg *Config, configDir string) (proxykit.Handler, error
 		}
 		// Tag the source with its provider type so emission downstream knows
 		// which upstream produced this binding. Captured by value so each set
-		// gets its own closure. defaultChain is the per-set fallback used
-		// when the username doesn't carry its own `scripts` array.
+		// gets its own closure.
 		provider := raw.SourceType
-		defaultChain := raw.resolvedDefaults
 		baseSrc := src
 		sources[raw.Name] = proxykit.HandlerFunc(func(ctx context.Context, req *proxykit.Request) (*proxykit.Result, error) {
 			ctx = utils.WithProviderName(ctx, provider)
@@ -125,13 +123,9 @@ func buildProxysetRouter(cfg *Config, configDir string) (proxykit.Handler, error
 			if err != nil || result == nil {
 				return result, err
 			}
-			// Resolve the chain: per-call override (from username) >
-			// per-set default > none. Install a hook only when at least
-			// one script is present.
+			// Install a response hook only when the username's
+			// `mitm.scripts` array contributed at least one script.
 			chain := getScripts(ctx)
-			if len(chain) == 0 {
-				chain = defaultChain
-			}
 			if len(chain) > 0 {
 				prev := result.ResponseHook
 				hookCtx := ctx

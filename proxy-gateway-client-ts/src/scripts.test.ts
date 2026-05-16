@@ -62,17 +62,17 @@ describe("scriptRef / scriptSource helpers", () => {
     });
 });
 
-describe("buildProxyUsername scripts field", () => {
-    it("omits scripts when absent", () => {
+describe("buildProxyUsername mitm.scripts field", () => {
+    it("omits mitm when absent", () => {
         const u = buildProxyUsername({
             proxySet: "set",
             minutes: 0,
             sessionParams: {},
         });
-        expect(decode<{ scripts?: unknown }>(u).scripts).toBeUndefined();
+        expect(decode<{ mitm?: unknown }>(u).mitm).toBeUndefined();
     });
 
-    it("emits bare strings as {ref} objects", () => {
+    it("emits scripts under mitm with bare strings normalised to {ref}", () => {
         const u = buildProxyUsername({
             proxySet: "set",
             minutes: 0,
@@ -80,11 +80,22 @@ describe("buildProxyUsername scripts field", () => {
             httpcloak: { preset: "chrome-latest" },
             scripts: ["antibot", scriptSource("def response_bailing(r): return None")],
         });
-        const decoded = decode<{ scripts: { ref?: string; source?: string }[] }>(u);
-        expect(decoded.scripts).toEqual([
+        const decoded = decode<{ mitm: { httpcloak: unknown; scripts: unknown[] } }>(u);
+        expect(decoded.mitm.scripts).toEqual([
             { kind: "ref", name: "antibot" },
             { kind: "source", source: "def response_bailing(r): return None" },
         ]);
+        expect(decoded.mitm.httpcloak).toEqual({ preset: "chrome-latest" });
+    });
+
+    it("emits an empty mitm object when only mitm: true is set", () => {
+        const u = buildProxyUsername({
+            proxySet: "set",
+            minutes: 0,
+            sessionParams: {},
+            mitm: true,
+        });
+        expect(decode<{ mitm: unknown }>(u).mitm).toEqual({});
     });
 
     it("rejects malformed entries at build", () => {
@@ -100,7 +111,7 @@ describe("buildProxyUsername scripts field", () => {
     });
 });
 
-describe("parseProxyUsername scripts field", () => {
+describe("parseProxyUsername mitm.scripts field", () => {
     it("round-trips a mixed chain", () => {
         const u = buildProxyUsername({
             proxySet: "set",
@@ -114,6 +125,7 @@ describe("parseProxyUsername scripts field", () => {
             { kind: "ref", name: "antibot" },
             { kind: "source", source: "def response_bailing(r): pass" },
         ]);
+        expect(parsed?.mitm).toBe(true);
     });
 
     it("returns null on a malformed scripts array", () => {
@@ -122,7 +134,31 @@ describe("parseProxyUsername scripts field", () => {
                 set: "x",
                 minutes: 0,
                 session_params: {},
-                scripts: [{ ref: "a", source: "b" }],
+                mitm: { scripts: [{ ref: "a", source: "b" }] },
+            }),
+        );
+        expect(parseProxyUsername(bad)).toBeNull();
+    });
+
+    it("returns null on top-level httpcloak (must live under mitm)", () => {
+        const bad = btoa(
+            JSON.stringify({
+                set: "x",
+                minutes: 0,
+                session_params: {},
+                httpcloak: { preset: "chrome-latest" },
+            }),
+        );
+        expect(parseProxyUsername(bad)).toBeNull();
+    });
+
+    it("returns null on top-level scripts (must live under mitm)", () => {
+        const bad = btoa(
+            JSON.stringify({
+                set: "x",
+                minutes: 0,
+                session_params: {},
+                scripts: [{ kind: "ref", name: "x" }],
             }),
         );
         expect(parseProxyUsername(bad)).toBeNull();
@@ -130,13 +166,13 @@ describe("parseProxyUsername scripts field", () => {
 });
 
 describe("ProxyConfiguration scripts", () => {
-    it("appends via scripts(...), scriptRef, scriptSource", () => {
+    it("appends via scripts(...), scriptRef, scriptSource and emits under mitm", () => {
         const u = new ProxyConfiguration("set")
             .scripts("a")
             .scriptRef("b")
             .scriptSource("def response_bailing(r): pass")
             .buildUsername();
-        expect(decode<{ scripts: unknown[] }>(u).scripts).toEqual([
+        expect(decode<{ mitm: { scripts: unknown[] } }>(u).mitm.scripts).toEqual([
             { kind: "ref", name: "a" },
             { kind: "ref", name: "b" },
             { kind: "source", source: "def response_bailing(r): pass" },
@@ -146,17 +182,22 @@ describe("ProxyConfiguration scripts", () => {
     it("clone deep-copies the scripts array", () => {
         const base = new ProxyConfiguration("set").scriptRef("antibot");
         const cp = base.clone().scriptRef("extra");
-        expect(decode<{ scripts: unknown[] }>(base.buildUsername()).scripts.length).toBe(1);
-        expect(decode<{ scripts: unknown[] }>(cp.buildUsername()).scripts.length).toBe(2);
+        expect(decode<{ mitm: { scripts: unknown[] } }>(base.buildUsername()).mitm.scripts.length).toBe(1);
+        expect(decode<{ mitm: { scripts: unknown[] } }>(cp.buildUsername()).mitm.scripts.length).toBe(2);
     });
 
-    it("clearScripts wipes previously appended entries", () => {
-        const u = new ProxyConfiguration("set").scriptRef("a").scriptRef("b").clearScripts().buildUsername();
-        expect(decode<{ scripts?: unknown }>(u).scripts).toBeUndefined();
+    it("noMitm wipes scripts, httpcloak, and the mitm flag", () => {
+        const u = new ProxyConfiguration("set").scriptRef("a").scriptRef("b").noMitm().buildUsername();
+        expect(decode<{ mitm?: unknown }>(u).mitm).toBeUndefined();
     });
 
-    it("omits the field entirely when no scripts have been appended", () => {
+    it("omits mitm entirely when no MITM-affecting builder is called", () => {
         const u = new ProxyConfiguration("set").buildUsername();
-        expect(decode<{ scripts?: unknown }>(u).scripts).toBeUndefined();
+        expect(decode<{ mitm?: unknown }>(u).mitm).toBeUndefined();
+    });
+
+    it("emits an empty mitm object when only .mitm() is called", () => {
+        const u = new ProxyConfiguration("set").mitm().buildUsername();
+        expect(decode<{ mitm: unknown }>(u).mitm).toEqual({});
     });
 });

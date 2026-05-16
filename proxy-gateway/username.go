@@ -14,14 +14,20 @@ import (
 // Username is the parsed proxy-gateway username JSON.
 //
 //	{"set":"residential", "minutes":5, "session_params":{"platform":"myapp","user":"alice"}}
-//	{"set":"direct", "httpcloak":{"preset":"chrome-latest"}}
-//	{"set":"direct", "httpcloak":{"preset":"chrome-latest"}, "scripts":["antibot", {"source":"..."}]}
+//	{"set":"direct", "mitm":{}}
+//	{"set":"direct", "mitm":{"httpcloak":"chrome-latest"}}
+//	{"set":"direct", "mitm":{"httpcloak":{"preset":"chrome-latest"}, "scripts":["antibot", {"kind":"source","source":"..."}]}}
+//
+// MITM mode is opt-in via the `mitm` object. Absence of `mitm` means tunnel
+// mode. An empty `mitm: {}` enables MITM with the default chrome-latest
+// httpcloak fingerprint; `httpcloak` and `scripts` are scoped strictly inside
+// `mitm` — top-level usage is a parse error.
 type Username struct {
 	SessionParams SessionParams
 	Minutes       int
-	Httpcloak     *utils.HTTPCloakSpec   // optional; triggers MITM + TLS fingerprint spoofing
+	Httpcloak     *utils.HTTPCloakSpec   // populated iff MITM enabled (always non-nil in MITM mode)
 	SessionMeta   map[string]interface{} // optional; informational only — never affects session/IP
-	Scripts       []*Script              // optional ordered chain; resolved from refs + inline
+	Scripts       []*Script              // optional ordered chain; resolved from refs + inline. MITM-only.
 	Raw           string                 // original JSON string, stored as session label
 }
 
@@ -42,13 +48,25 @@ func ParseUsername(raw string, registry ScriptRegistry) (*Username, error) {
 		}
 		jsonBytes = decoded
 	}
+	// Reject top-level legacy keys explicitly. httpcloak and scripts must
+	// live inside the `mitm` object — single source of truth for MITM mode.
+	var topLevel map[string]json.RawMessage
+	if err := json.Unmarshal(jsonBytes, &topLevel); err != nil {
+		return nil, fmt.Errorf("username is not valid JSON: %w", err)
+	}
+	if _, ok := topLevel["httpcloak"]; ok {
+		return nil, fmt.Errorf("top-level 'httpcloak' is no longer accepted — move it inside the 'mitm' object")
+	}
+	if _, ok := topLevel["scripts"]; ok {
+		return nil, fmt.Errorf("top-level 'scripts' is no longer accepted — move it inside the 'mitm' object")
+	}
+
 	var j struct {
 		Set           string                 `json:"set"`
 		Minutes       int                    `json:"minutes"`
 		SessionParams map[string]interface{} `json:"session_params"`
 		SessionMeta   map[string]interface{} `json:"session_meta"`
-		Httpcloak     json.RawMessage        `json:"httpcloak"`
-		Scripts       []json.RawMessage      `json:"scripts"`
+		Mitm          json.RawMessage        `json:"mitm"`
 	}
 	if err := json.Unmarshal(jsonBytes, &j); err != nil {
 		return nil, fmt.Errorf("username is not valid JSON: %w", err)
@@ -56,17 +74,10 @@ func ParseUsername(raw string, registry ScriptRegistry) (*Username, error) {
 	if j.Set == "" {
 		return nil, fmt.Errorf("'set' must not be empty")
 	}
-	spec, err := utils.ParseHTTPCloakSpec(j.Httpcloak)
-	if err != nil {
-		return nil, fmt.Errorf("httpcloak: %w", err)
-	}
 
-	scripts, err := resolveScriptList("username", j.Scripts, registry, "username")
+	spec, scripts, err := parseMITM(j.Mitm, registry)
 	if err != nil {
 		return nil, err
-	}
-	if len(scripts) > 0 && spec == nil {
-		return nil, fmt.Errorf("scripts requires httpcloak to be set (MITM required)")
 	}
 
 	return &Username{
@@ -77,6 +88,36 @@ func ParseUsername(raw string, registry ScriptRegistry) (*Username, error) {
 		Scripts:       scripts,
 		Raw:           string(jsonBytes),
 	}, nil
+}
+
+// parseMITM decodes the optional `mitm` object. Returns (nil, nil, nil) when
+// the key is absent — meaning tunnel mode. When present (even as `{}`) the
+// returned spec is always non-nil: an absent `httpcloak` defaults to the
+// chrome-latest preset so MITM activates with sensible defaults.
+func parseMITM(raw json.RawMessage, registry ScriptRegistry) (*utils.HTTPCloakSpec, []*Script, error) {
+	raw = trimJSONSpace(raw)
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil, nil
+	}
+	var m struct {
+		Httpcloak json.RawMessage   `json:"httpcloak"`
+		Scripts   []json.RawMessage `json:"scripts"`
+	}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, nil, fmt.Errorf("mitm: must be an object: %w", err)
+	}
+	spec, err := utils.ParseHTTPCloakSpec(m.Httpcloak)
+	if err != nil {
+		return nil, nil, fmt.Errorf("mitm.httpcloak: %w", err)
+	}
+	if spec == nil {
+		spec = &utils.HTTPCloakSpec{Preset: "chrome-latest"}
+	}
+	scripts, err := resolveScriptList("mitm.scripts", m.Scripts, registry, "username")
+	if err != nil {
+		return nil, nil, err
+	}
+	return spec, scripts, nil
 }
 
 // resolveScriptList parses a JSON array whose entries are either:

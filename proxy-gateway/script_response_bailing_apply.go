@@ -91,12 +91,19 @@ func ApplyResponseBailing(ctx context.Context, chain []*Script, resp *http.Respo
 	}
 
 	// Stream-and-poll until any bail / cap / EOF.
+	//
+	// The script gets a chance to inspect the buffer whenever new bytes
+	// arrived OR upstream closed. Crucially, we ALSO call the script when
+	// Pull returned bytes alongside a non-EOF error (e.g. a partial read
+	// followed by a stream-level error) — without this, the just-pulled
+	// prefix would be discarded without the script ever seeing it.
 	for {
 		if bb.Len() >= releaseCap {
 			break
 		}
-		_, pullErr := bb.Pull(chunkSize)
-		if pullErr == io.EOF {
+		n, pullErr := bb.Pull(chunkSize)
+
+		if n > 0 || pullErr == io.EOF {
 			reason, bailedBy, errMsg = callChain(ctx, active, disabled, resp.StatusCode, headers, bb.Peek)
 			if errMsg != "" {
 				scriptErrors = append(scriptErrors, errMsg)
@@ -105,18 +112,10 @@ func ApplyResponseBailing(ctx context.Context, chain []*Script, resp *http.Respo
 				_ = bb.Close()
 				return bailResponse(resp, bb, reason, bailedBy, scriptErrors)
 			}
-			break
 		}
+
 		if pullErr != nil {
-			break // upstream error; let copyResponse surface it
-		}
-		reason, bailedBy, errMsg = callChain(ctx, active, disabled, resp.StatusCode, headers, bb.Peek)
-		if errMsg != "" {
-			scriptErrors = append(scriptErrors, errMsg)
-		}
-		if reason != "" {
-			_ = bb.Close()
-			return bailResponse(resp, bb, reason, bailedBy, scriptErrors)
+			break // EOF, cap-reached, or other read error — stop polling
 		}
 	}
 
@@ -128,11 +127,11 @@ func ApplyResponseBailing(ctx context.Context, chain []*Script, resp *http.Respo
 	return resp
 }
 
-// callChain runs bail() on every still-enabled script in order. Returns:
+// callChain runs response_bailing() on every still-enabled script in
+// order. Returns:
 //   - reason: first non-empty bail string, or ""
 //   - bailedBy: name of the script that bailed (empty if none)
-//   - errMsg: joined error messages from scripts that raised THIS round,
-//             with "script_name: msg" formatting (empty if none)
+//   - errMsg: joined error messages from scripts that raised THIS round
 //
 // Scripts that raise are marked disabled in the parallel `disabled` slice.
 func callChain(ctx context.Context, scripts []*Script, disabled []bool, status int, headers map[string][]string, peek PeekFunc) (reason, bailedBy, errMsg string) {
@@ -173,6 +172,9 @@ func bailResponse(orig *http.Response, bb *bufferedBody, reason, bailedBy string
 	if len(scriptErrors) > 0 {
 		out.Header.Set(HeaderResponseBailingError, truncateForHeader(strings.Join(scriptErrors, " | ")))
 	}
+
+	// Forward the buffered upstream prefix as-is — the client gets to parse
+	// out whatever it needs from those bytes.
 	body := append([]byte(nil), bb.buf...)
 	out.Body = io.NopCloser(bytesReader(body))
 	out.ContentLength = int64(len(body))
