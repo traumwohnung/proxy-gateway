@@ -76,8 +76,8 @@ default_scripts = ["antibot", "skip_large"]
   "httpcloak":      { "preset": "chrome-latest" },
   "scripts": [
     "antibot",
-    { "source": "def response_bailing(r):\n    if r.scan(b'<title>') >= 0:\n        return 'has_title'" },
-    { "ref": "skip_large" }
+    { "kind": "source", "source": "def response_bailing(r):\n    if r.scan(b'<title>') >= 0:\n        return 'has_title'" },
+    { "kind": "ref", "name": "skip_large" }
   ]
 }
 ```
@@ -87,15 +87,15 @@ Each entry is one of:
 | Form                          | Meaning                                                        |
 | ----------------------------- | -------------------------------------------------------------- |
 | `"name"`                      | Reference to a `[[script]]` named `name` in config             |
-| `{"ref": "name"}`             | Same as above, just explicit                                   |
-| `{"source": "def response_bailing(r): …"}`| Inline Starlark, compiled at username parse                    |
+| `{ "kind": "ref", "name": "name" }`             | Same as above, just explicit                                   |
+| `{ "kind": "source", "source": "def response_bailing(r): …" }`| Inline Starlark, compiled at username parse                    |
 
 - Inline source ≤ 32 KiB, same compile rules as named scripts.
 - Refs require a registry — username parsing fails if a ref appears with
   no `[[script]]` entries on the gateway.
 - Setting `scripts` REPLACES the per-set `default_scripts`. To extend a
   per-set chain, include the named refs explicitly:
-  `"scripts": ["antibot", "skip_large", {"source": "..."}]`.
+  `"scripts": ["antibot", "skip_large", { "kind": "source", "source": "..." }]`.
 
 ## Lifecycle of the bail chain
 
@@ -250,7 +250,7 @@ bails, the heavier regex scan never runs.
 ```json
 "scripts": [
   "antibot",
-  { "source": "def response_bailing(r):\n    if r.scan(b'<error>') >= 0:\n        return 'error_marker'" }
+  { "kind": "source", "source": "def response_bailing(r):\n    if r.scan(b'<error>') >= 0:\n        return 'error_marker'" }
 ]
 ```
 

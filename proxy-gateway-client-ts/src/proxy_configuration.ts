@@ -1,5 +1,6 @@
 import { ProxyClient } from "./proxy_client";
-import type { HTTPCloakSpec, SessionInfo, SessionMeta, SessionParams } from "./types";
+import { scriptRef, scriptSource } from "./types";
+import type { HTTPCloakSpec, ScriptEntry, SessionInfo, SessionMeta, SessionParams } from "./types";
 
 /**
  * Fluent builder for a single proxy-gateway proxy configuration. From it
@@ -22,17 +23,19 @@ export class ProxyConfiguration {
         sessionParams: SessionParams;
         sessionMeta: SessionMeta;
         httpcloak?: HTTPCloakSpec;
+        scripts: ScriptEntry[];
     };
     private client: ProxyClient | null = null;
 
     constructor(set: string) {
-        this.params = { set, minutes: 0, sessionParams: {}, sessionMeta: {} };
+        this.params = { set, minutes: 0, sessionParams: {}, sessionMeta: {}, scripts: [] };
     }
 
     /**
-     * Returns a deep copy of this configuration. The session_params and
-     * session_meta maps are copied so further mutations on the clone do not
-     * affect the original. The bound `ProxyClient` reference is shared.
+     * Returns a deep copy of this configuration. The session_params,
+     * session_meta, and scripts collections are copied so further mutations on
+     * the clone do not affect the original. The bound `ProxyClient` reference
+     * is shared.
      */
     clone(): ProxyConfiguration {
         const cp = new ProxyConfiguration(this.params.set);
@@ -42,6 +45,7 @@ export class ProxyConfiguration {
             sessionParams: { ...this.params.sessionParams },
             sessionMeta: { ...this.params.sessionMeta },
             httpcloak: this.params.httpcloak,
+            scripts: [...this.params.scripts],
         };
         cp.client = this.client;
         return cp;
@@ -77,6 +81,43 @@ export class ProxyConfiguration {
     }
 
     /**
+     * Append entries to the ordered chain of Starlark scripts evaluated
+     * server-side on the MITM'd response. Bare strings are treated as
+     * `{ ref: name }`. Requires `httpcloak` to be set.
+     *
+     * @example
+     * cfg.scripts("antibot", { source: "def response_bailing(r): return None" });
+     */
+    scripts(...entries: (string | ScriptEntry)[]): this {
+        for (const e of entries) {
+            this.params.scripts.push(typeof e === "string" ? scriptRef(e) : e);
+        }
+        return this;
+    }
+
+    /** Convenience for `cfg.scripts(scriptRef(name))`. */
+    scriptRef(name: string): this {
+        this.params.scripts.push(scriptRef(name));
+        return this;
+    }
+
+    /** Convenience for `cfg.scripts(scriptSource(src))`. */
+    scriptSource(src: string): this {
+        this.params.scripts.push(scriptSource(src));
+        return this;
+    }
+
+    /**
+     * Remove any previously appended scripts. Useful when cloning a base
+     * configuration that already has scripts but wanting an explicit "no
+     * scripts" override (which suppresses the per-set default on the gateway).
+     */
+    clearScripts(): this {
+        this.params.scripts = [];
+        return this;
+    }
+
+    /**
      * Attach the gateway connection (proxy endpoint + admin API). Required
      * for `buildUrl`, `buildFetch`, `rotate`, and the retry primitives.
      */
@@ -96,6 +137,9 @@ export class ProxyConfiguration {
         }
         if (this.params.httpcloak !== undefined) {
             payload.httpcloak = this.params.httpcloak;
+        }
+        if (this.params.scripts.length > 0) {
+            payload.scripts = this.params.scripts;
         }
         return btoa(JSON.stringify(payload));
     }

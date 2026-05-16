@@ -27,6 +27,119 @@ type UsernameParams struct {
 	// proxy-gateway intercepts the TLS connection and re-establishes it with
 	// a browser-like fingerprint.
 	HTTPCloak *HTTPCloakSpec `json:"httpcloak,omitempty"`
+	// Scripts is the ordered chain of Starlark scripts evaluated server-side
+	// on this request's MITM'd response. Each entry is either a reference
+	// to a named [[script]] declared in the gateway's config.toml, or an
+	// inline source. Requires HTTPCloak to be set (MITM only).
+	//
+	// See the gateway's SCRIPTS.md for the full guide.
+	Scripts []ScriptEntry `json:"scripts,omitempty"`
+}
+
+// ScriptEntry is one entry in a username's `scripts` chain. Wire form is a
+// tagged discriminated union with `kind` as the discriminator:
+//
+//   - {"kind": "ref",    "name":   "antibot"}
+//   - {"kind": "source", "source": "def response_bailing(r): pass"}
+//
+// On the gateway-side username parser a bare string is also accepted as
+// shorthand for {kind:"ref", name:<string>}; this SDK always emits the
+// tagged form for clarity.
+//
+// Use ScriptRef / ScriptSource constructors rather than building this
+// struct by hand.
+type ScriptEntry struct {
+	Kind   ScriptEntryKind `json:"kind"`
+	Name   string          `json:"name,omitempty"`
+	Source string          `json:"source,omitempty"`
+}
+
+// ScriptEntryKind is the discriminator field on a ScriptEntry.
+type ScriptEntryKind string
+
+const (
+	// ScriptEntryKindRef references a named [[script]] on the gateway.
+	ScriptEntryKindRef ScriptEntryKind = "ref"
+	// ScriptEntryKindSource carries inline Starlark source.
+	ScriptEntryKindSource ScriptEntryKind = "source"
+)
+
+// MarshalJSON emits the wire form and validates internal consistency.
+func (e ScriptEntry) MarshalJSON() ([]byte, error) {
+	switch e.Kind {
+	case ScriptEntryKindRef:
+		if e.Name == "" {
+			return nil, errors.New("ScriptEntry: kind=ref requires Name")
+		}
+		if e.Source != "" {
+			return nil, errors.New("ScriptEntry: kind=ref must not carry Source")
+		}
+		return json.Marshal(struct {
+			Kind ScriptEntryKind `json:"kind"`
+			Name string          `json:"name"`
+		}{e.Kind, e.Name})
+	case ScriptEntryKindSource:
+		if e.Source == "" {
+			return nil, errors.New("ScriptEntry: kind=source requires Source")
+		}
+		if e.Name != "" {
+			return nil, errors.New("ScriptEntry: kind=source must not carry Name")
+		}
+		return json.Marshal(struct {
+			Kind   ScriptEntryKind `json:"kind"`
+			Source string          `json:"source"`
+		}{e.Kind, e.Source})
+	default:
+		return nil, fmt.Errorf("ScriptEntry: invalid Kind %q (expected %q or %q)",
+			e.Kind, ScriptEntryKindRef, ScriptEntryKindSource)
+	}
+}
+
+// UnmarshalJSON accepts a bare string ("name", shorthand for ref-by-name)
+// or the tagged object form.
+func (e *ScriptEntry) UnmarshalJSON(data []byte) error {
+	if len(data) > 0 && data[0] == '"' {
+		var s string
+		if err := json.Unmarshal(data, &s); err != nil {
+			return err
+		}
+		e.Kind = ScriptEntryKindRef
+		e.Name = s
+		return nil
+	}
+	var obj struct {
+		Kind   ScriptEntryKind `json:"kind"`
+		Name   string          `json:"name"`
+		Source string          `json:"source"`
+	}
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return err
+	}
+	switch obj.Kind {
+	case ScriptEntryKindRef:
+		if obj.Name == "" {
+			return errors.New("ScriptEntry: kind=ref requires non-empty 'name'")
+		}
+		*e = ScriptEntry{Kind: ScriptEntryKindRef, Name: obj.Name}
+	case ScriptEntryKindSource:
+		if obj.Source == "" {
+			return errors.New("ScriptEntry: kind=source requires non-empty 'source'")
+		}
+		*e = ScriptEntry{Kind: ScriptEntryKindSource, Source: obj.Source}
+	case "":
+		return errors.New("ScriptEntry: missing 'kind' discriminator (expected \"ref\" or \"source\")")
+	default:
+		return fmt.Errorf("ScriptEntry: unknown kind %q (expected \"ref\" or \"source\")", obj.Kind)
+	}
+	return nil
+}
+
+// ScriptRef builds a ScriptEntry referencing a named server-side script.
+func ScriptRef(name string) ScriptEntry { return ScriptEntry{Kind: ScriptEntryKindRef, Name: name} }
+
+// ScriptSource builds a ScriptEntry with inline Starlark source.
+func ScriptSource(src string) ScriptEntry {
+	return ScriptEntry{Kind: ScriptEntryKindSource, Source: src}
 }
 
 // HTTPCloakSpec configures TLS fingerprint spoofing.

@@ -80,9 +80,9 @@ func ParseUsername(raw string, registry ScriptRegistry) (*Username, error) {
 }
 
 // resolveScriptList parses a JSON array whose entries are either:
-//   - a JSON string (reference to a named script in the registry)
-//   - an object {"ref": "name"} (same as string form)
-//   - an object {"source": "def response_bailing(r): ..."} (inline source compiled now)
+//   - a JSON string (shorthand for {"kind":"ref","name":<string>})
+//   - {"kind":"ref","name":"..."}    — reference a named script
+//   - {"kind":"source","source":"..."}— inline source compiled now
 //
 // Returns the ordered slice of *Script. inlineNamePrefix is used in the
 // compile-error context (e.g. "username" or "config:residential").
@@ -96,7 +96,7 @@ func resolveScriptList(context string, entries []json.RawMessage, registry Scrip
 		if len(raw) == 0 {
 			return nil, fmt.Errorf("%s scripts[%d]: empty entry", context, i)
 		}
-		// String form: bare reference.
+		// Shorthand: bare string = ref by name.
 		if raw[0] == '"' {
 			var name string
 			if err := json.Unmarshal(raw, &name); err != nil {
@@ -109,32 +109,39 @@ func resolveScriptList(context string, entries []json.RawMessage, registry Scrip
 			out = append(out, s)
 			continue
 		}
-		// Object form: {"ref": "..."} or {"source": "..."}.
+		// Tagged form: discriminated by "kind".
 		var obj struct {
-			Ref    string `json:"ref"`
+			Kind   string `json:"kind"`
+			Name   string `json:"name"`
 			Source string `json:"source"`
 		}
 		if err := json.Unmarshal(raw, &obj); err != nil {
 			return nil, fmt.Errorf("%s scripts[%d]: %w", context, i, err)
 		}
-		switch {
-		case obj.Ref != "" && obj.Source != "":
-			return nil, fmt.Errorf("%s scripts[%d]: set exactly one of 'ref' or 'source'", context, i)
-		case obj.Ref != "":
-			s, err := resolveRef(context, i, obj.Ref, registry)
+		switch obj.Kind {
+		case "ref":
+			if obj.Name == "" {
+				return nil, fmt.Errorf("%s scripts[%d]: kind=ref requires non-empty 'name'", context, i)
+			}
+			s, err := resolveRef(context, i, obj.Name, registry)
 			if err != nil {
 				return nil, err
 			}
 			out = append(out, s)
-		case obj.Source != "":
+		case "source":
+			if obj.Source == "" {
+				return nil, fmt.Errorf("%s scripts[%d]: kind=source requires non-empty 'source'", context, i)
+			}
 			name := fmt.Sprintf("%s[%d]", inlineNamePrefix, i)
 			s, err := Compile(name, obj.Source)
 			if err != nil {
 				return nil, fmt.Errorf("%s scripts[%d]: %w", context, i, err)
 			}
 			out = append(out, s)
+		case "":
+			return nil, fmt.Errorf("%s scripts[%d]: missing 'kind' discriminator (expected \"ref\" or \"source\")", context, i)
 		default:
-			return nil, fmt.Errorf("%s scripts[%d]: must specify 'ref' or 'source'", context, i)
+			return nil, fmt.Errorf("%s scripts[%d]: unknown kind %q (expected \"ref\" or \"source\")", context, i, obj.Kind)
 		}
 	}
 	return out, nil

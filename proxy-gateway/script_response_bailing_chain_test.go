@@ -15,7 +15,7 @@ import (
 
 // ── ParseUsername: scripts array ───────────────────────────────────────────
 
-const validInline = `{"source":"def response_bailing(r): return None"}`
+const validInline = `{"kind":"source","source":"def response_bailing(r): return None"}`
 
 func TestParseUsername_InlineScriptCompiled(t *testing.T) {
 	raw := `{"set":"res","httpcloak":{"preset":"chrome-latest"},"scripts":[` + validInline + `]}`
@@ -69,7 +69,7 @@ func TestParseUsername_UnknownRefErrors(t *testing.T) {
 func TestParseUsername_MixedRefAndInline(t *testing.T) {
 	s, _ := Compile("a", `def response_bailing(r): return None`)
 	reg := scriptMap{"a": s}
-	raw := `{"set":"res","httpcloak":{"preset":"chrome-latest"},"scripts":["a",` + validInline + `,{"ref":"a"}]}`
+	raw := `{"set":"res","httpcloak":{"preset":"chrome-latest"},"scripts":["a",` + validInline + `,{"kind":"ref","name":"a"}]}`
 	u, err := ParseUsername(raw, reg)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
@@ -80,10 +80,10 @@ func TestParseUsername_MixedRefAndInline(t *testing.T) {
 }
 
 func TestParseUsername_RefAndSourceTogetherErrors(t *testing.T) {
-	raw := `{"set":"res","httpcloak":{"preset":"chrome-latest"},"scripts":[{"ref":"x","source":"def response_bailing(r): return None"}]}`
+	raw := `{"set":"res","httpcloak":{"preset":"chrome-latest"},"scripts":[{"kind":"nonsense"}]}`
 	_, err := ParseUsername(raw, scriptMap{})
-	if err == nil || !strings.Contains(err.Error(), "exactly one of") {
-		t.Fatalf("want exactly-one-of error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "unknown kind") {
+		t.Fatalf("want unknown-kind error, got %v", err)
 	}
 }
 
@@ -259,7 +259,7 @@ default_scripts = ["ignore"]
 	cfg, _ := LoadConfig(path)
 	srv, _ := BuildServer(cfg, dir, "", nil)
 
-	override := `{"source":"def response_bailing(r): return 'override'"}`
+	override := `{"kind":"source","source":"def response_bailing(r): return 'override'"}`
 	raw := `{"set":"res","httpcloak":{"preset":"chrome-latest"},"scripts":[` + override + `]}`
 	result, err := srv.Pipeline.Resolve(context.Background(), &proxykit.Request{RawUsername: raw})
 	if err != nil {

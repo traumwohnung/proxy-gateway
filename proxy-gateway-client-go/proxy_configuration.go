@@ -58,6 +58,9 @@ func (b *ProxyConfiguration) Clone() *ProxyConfiguration {
 			cp.params.SessionMeta[k] = v
 		}
 	}
+	if b.params.Scripts != nil {
+		cp.params.Scripts = append([]ScriptEntry(nil), b.params.Scripts...)
+	}
 	return cp
 }
 
@@ -93,6 +96,41 @@ func (b *ProxyConfiguration) SessionMeta(key string, value any) *ProxyConfigurat
 // HTTPCloak enables TLS fingerprint spoofing.
 func (b *ProxyConfiguration) HTTPCloak(spec *HTTPCloakSpec) *ProxyConfiguration {
 	b.params.HTTPCloak = spec
+	return b
+}
+
+// Scripts appends to the ordered chain of Starlark scripts evaluated on
+// the MITM'd response. Entries are kept in the order added. Use ScriptRef
+// or ScriptSource to construct entries:
+//
+//	cfg.Scripts(
+//	    proxygatewayclient.ScriptRef("antibot"),
+//	    proxygatewayclient.ScriptSource(`def response_bailing(r): return "x" if r.scan(b"BLOCK") >= 0 else None`),
+//	)
+//
+// Requires HTTPCloak to be set on the configuration; the gateway rejects
+// scripts without httpcloak (MITM is required to see plaintext).
+func (b *ProxyConfiguration) Scripts(entries ...ScriptEntry) *ProxyConfiguration {
+	b.params.Scripts = append(b.params.Scripts, entries...)
+	return b
+}
+
+// ScriptRef is a convenience for cfg.Scripts(ScriptRef(name)).
+func (b *ProxyConfiguration) ScriptRef(name string) *ProxyConfiguration {
+	return b.Scripts(ScriptRef(name))
+}
+
+// ScriptSource is a convenience for cfg.Scripts(ScriptSource(src)).
+func (b *ProxyConfiguration) ScriptSource(src string) *ProxyConfiguration {
+	return b.Scripts(ScriptSource(src))
+}
+
+// ClearScripts removes any previously appended scripts. Useful when
+// cloning a base configuration that has scripts but wanting an explicit
+// "no scripts" override (which suppresses the per-set default on the
+// gateway).
+func (b *ProxyConfiguration) ClearScripts() *ProxyConfiguration {
+	b.params.Scripts = nil
 	return b
 }
 
