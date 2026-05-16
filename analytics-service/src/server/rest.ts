@@ -14,7 +14,10 @@ function readBody(req: http.IncomingMessage, limit = 256 * 1024): Promise<string
       }
       chunks.push(c);
     });
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    // Cast to satisfy TS 6 / @types/node: Buffer is now generic over its
+    // backing ArrayBuffer kind and Buffer.concat's parameter type forbids
+    // SharedArrayBuffer. We only push regular Buffers, so the cast is safe.
+    req.on('end', () => resolve(Buffer.concat(chunks as readonly Uint8Array[]).toString('utf8')));
     req.on('error', reject);
   });
 }

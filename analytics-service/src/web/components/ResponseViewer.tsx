@@ -180,7 +180,7 @@ export default function ResponseViewer({ result, query, isLoading }: Props) {
                         color: 'hsl(var(--popover-foreground))',
                       }}
                       labelStyle={{ color: 'hsl(var(--muted-foreground))' }}
-                      formatter={(value: number) => [fmtMetric(query.metric, value), labelFor(query.metric)]}
+                      formatter={(value: unknown) => [fmtMetric(query.metric, Number(value)), labelFor(query.metric)]}
                     />
                     <Area type="monotone" dataKey="value" stroke={accentVar} strokeWidth={2} fillOpacity={1} fill="url(#colorValue)" />
                   </AreaChart>
@@ -208,7 +208,7 @@ export default function ResponseViewer({ result, query, isLoading }: Props) {
                         color: 'hsl(var(--popover-foreground))',
                       }}
                       labelStyle={{ color: 'hsl(var(--muted-foreground))' }}
-                      formatter={(value: number) => [fmtMetric(query.metric, value), labelFor(query.metric)]}
+                      formatter={(value: unknown) => [fmtMetric(query.metric, Number(value)), labelFor(query.metric)]}
                     />
                     <Bar dataKey="value" radius={[4, 4, 0, 0]}>
                       {aggregatedChart.map((entry, idx) => (

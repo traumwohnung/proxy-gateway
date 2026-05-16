@@ -34,7 +34,7 @@ interface FormValues {
     session_params_eq: { key: string; value: string }[];
     session_params_has_key: { key: string }[];
   };
-  group_by: { kind: 'proxyset' | 'json'; key: string }[];
+  group_by: { kind: 'proxyset' | 'provider' | 'close_reason' | 'json'; key: string }[];
   sort_by: string;
   sort_dir: 'asc' | 'desc';
   limit: number;
@@ -58,7 +58,9 @@ function queryToValues(q: UsageQuery): FormValues {
       session_params_has_key: (w.session_params_has_key ?? []).map((k) => ({ key: k })),
     },
     group_by: (q.group_by ?? []).map((d) =>
-      d.kind === 'proxyset' ? { kind: 'proxyset' as const, key: '' } : { kind: 'json' as const, key: d.key },
+      d.kind === 'json'
+        ? { kind: 'json' as const, key: d.key }
+        : { kind: d.kind, key: '' },
     ),
     sort_by: q.sort?.by ?? 'metric',
     sort_dir: q.sort?.dir ?? 'desc',
@@ -89,8 +91,12 @@ function valuesToQuery(v: FormValues): UsageQuery {
   if (Object.keys(where).length) next.where = where;
 
   const groups: Dimension[] = v.group_by
-    .filter((g) => g.kind === 'proxyset' || g.key.trim())
-    .map((g) => (g.kind === 'proxyset' ? { kind: 'proxyset' } : { kind: 'json', key: g.key.trim() }));
+    .filter((g) => g.kind !== 'json' || g.key.trim())
+    .map((g) =>
+      g.kind === 'json'
+        ? { kind: 'json', key: g.key.trim() }
+        : { kind: g.kind },
+    );
   if (groups.length) next.group_by = groups;
 
   if (v.sort_by) next.sort = { by: v.sort_by, dir: v.sort_dir };

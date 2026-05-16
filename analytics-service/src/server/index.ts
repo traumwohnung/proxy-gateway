@@ -61,7 +61,9 @@ async function startDashboard(): Promise<void> {
     if (pathname.includes('..')) return false;
     const filePath = path.join(clientDir, pathname);
     if (!filePath.startsWith(clientDir)) return false;
-    let stat: fs.Stats;
+    // No annotation needed — fs.statSync returns Stats inferred. The explicit
+    // namespace type doesn't survive a dynamic `import('node:fs')` under TS 6.
+    let stat;
     try {
       stat = fs.statSync(filePath);
     } catch {
