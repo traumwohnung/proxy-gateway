@@ -17,11 +17,12 @@ import (
 //	{"set":"direct", "httpcloak":{"preset":"chrome-latest"}}
 //	{"set":"direct", "httpcloak":{"preset":"chrome-latest","ja3":"771,...","akamai":"1:65536|..."}}
 type Username struct {
-	SessionParams SessionParams
-	Minutes       int
-	Httpcloak     *utils.HTTPCloakSpec   // optional; triggers MITM + TLS fingerprint spoofing
-	SessionMeta   map[string]interface{} // optional; informational only — never affects session/IP
-	Raw           string                 // original JSON string, stored as session label
+	SessionParams  SessionParams
+	Minutes        int
+	Httpcloak      *utils.HTTPCloakSpec   // optional; triggers MITM + TLS fingerprint spoofing
+	SessionMeta    map[string]interface{} // optional; informational only — never affects session/IP
+	ResponseScript *utils.Script          // optional; per-request MITM response filter (Starlark)
+	Raw            string                 // original JSON string, stored as session label
 }
 
 // ParseUsername parses a raw JSON username string.
@@ -39,11 +40,12 @@ func ParseUsername(raw string) (*Username, error) {
 		jsonBytes = decoded
 	}
 	var j struct {
-		Set           string                 `json:"set"`
-		Minutes       int                    `json:"minutes"`
-		SessionParams map[string]interface{} `json:"session_params"`
-		SessionMeta   map[string]interface{} `json:"session_meta"`
-		Httpcloak     json.RawMessage        `json:"httpcloak"`
+		Set            string                 `json:"set"`
+		Minutes        int                    `json:"minutes"`
+		SessionParams  map[string]interface{} `json:"session_params"`
+		SessionMeta    map[string]interface{} `json:"session_meta"`
+		Httpcloak      json.RawMessage        `json:"httpcloak"`
+		ResponseScript string                 `json:"response_script"`
 	}
 	if err := json.Unmarshal(jsonBytes, &j); err != nil {
 		return nil, fmt.Errorf("username is not valid JSON: %w", err)
@@ -55,12 +57,23 @@ func ParseUsername(raw string) (*Username, error) {
 	if err != nil {
 		return nil, fmt.Errorf("httpcloak: %w", err)
 	}
+	var script *utils.Script
+	if j.ResponseScript != "" {
+		if spec == nil {
+			return nil, fmt.Errorf("response_script requires httpcloak to be set (MITM required)")
+		}
+		script, err = utils.Compile("username", j.ResponseScript)
+		if err != nil {
+			return nil, fmt.Errorf("response_script: %w", err)
+		}
+	}
 	return &Username{
-		SessionParams: SessionParams{Set: j.Set, Meta: j.SessionParams},
-		Minutes:       j.Minutes,
-		Httpcloak:     spec,
-		SessionMeta:   j.SessionMeta,
-		Raw:           string(jsonBytes),
+		SessionParams:  SessionParams{Set: j.Set, Meta: j.SessionParams},
+		Minutes:        j.Minutes,
+		Httpcloak:      spec,
+		SessionMeta:    j.SessionMeta,
+		ResponseScript: script,
+		Raw:            string(jsonBytes),
 	}, nil
 }
 
@@ -75,6 +88,7 @@ const (
 	ctxHTTPCloakPreset
 	ctxMinutes
 	ctxSessionMetaJSON
+	ctxResponseScript
 )
 
 // Note: the canonical session params JSON and provider name live on the
@@ -125,6 +139,20 @@ func getHTTPCloakSpec(ctx context.Context) *utils.HTTPCloakSpec {
 	return v
 }
 
+// withResponseScript stores the per-request compiled response-filter script
+// (from username override or per-set default) on the context.
+func withResponseScript(ctx context.Context, script *utils.Script) context.Context {
+	if script == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxResponseScript, script)
+}
+
+func getResponseScript(ctx context.Context) *utils.Script {
+	v, _ := ctx.Value(ctxResponseScript).(*utils.Script)
+	return v
+}
+
 // ---------------------------------------------------------------------------
 // Middleware
 // ---------------------------------------------------------------------------
@@ -155,6 +183,7 @@ func ParseJSONCreds(next proxykit.Handler) proxykit.Handler {
 		ctx = utils.WithProxysetName(ctx, u.SessionParams.Set)
 		ctx = withSessionMetaJSON(ctx, MetaCanonicalJSON(u.SessionMeta))
 		ctx = withHTTPCloakSpec(ctx, u.Httpcloak)
+		ctx = withResponseScript(ctx, u.ResponseScript)
 
 		return next.Resolve(ctx, req)
 	})

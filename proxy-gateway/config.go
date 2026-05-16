@@ -40,6 +40,24 @@ type ProxySetConfig struct {
 	Geonode      *utils.GeonodeConfig      `toml:"geonode"      yaml:"geonode"      json:"geonode"`
 	ProxyingIO   *utils.ProxyingIOConfig   `toml:"proxyingio"   yaml:"proxyingio"   json:"proxyingio"`
 	Webshare     *utils.WebshareConfig     `toml:"webshare"     yaml:"webshare"     json:"webshare"`
+
+	// ResponseScript is an optional Starlark source applied to every MITM
+	// response on this proxy set, unless overridden by the per-request
+	// username's response_script field. Compiled at config load; an invalid
+	// script fails startup.
+	ResponseScript string `toml:"response_script" yaml:"response_script" json:"response_script"`
+
+	// compiledScript holds the pre-compiled ResponseScript so we don't pay
+	// parse cost per request. Populated by LoadConfig.
+	compiledScript *utils.Script `toml:"-" yaml:"-" json:"-"`
+}
+
+// CompiledScript returns the per-set default response script, or nil if none.
+func (p *ProxySetConfig) CompiledScript() *utils.Script {
+	if p == nil {
+		return nil
+	}
+	return p.compiledScript
 }
 
 // LoadConfig reads and parses a TOML, YAML, or JSON config file.
@@ -62,6 +80,19 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if err != nil {
 		return nil, fmt.Errorf("parsing config %s: %w", path, err)
+	}
+	// Pre-compile per-set response scripts so config errors fail at boot,
+	// not on the first matching request.
+	for i := range cfg.ProxySets {
+		ps := &cfg.ProxySets[i]
+		if ps.ResponseScript == "" {
+			continue
+		}
+		s, cerr := utils.Compile("config:"+ps.Name, ps.ResponseScript)
+		if cerr != nil {
+			return nil, fmt.Errorf("proxy_set %q response_script: %w", ps.Name, cerr)
+		}
+		ps.compiledScript = s
 	}
 	return cfg, nil
 }

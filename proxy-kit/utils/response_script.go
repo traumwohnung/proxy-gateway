@@ -28,9 +28,14 @@
 package utils
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -348,5 +353,221 @@ func actionName(a Action) string {
 		return "extract"
 	default:
 		return "passthrough"
+	}
+}
+
+// ── bufferedBody: io.ReadCloser wrapper with Peek + RequestMore ────────────
+
+// bufferedBody wraps an io.ReadCloser and lets a Starlark script peek at the
+// already-buffered prefix and pull more bytes from upstream on demand. After
+// the script returns passthrough, the wrapper acts as a normal io.ReadCloser
+// that drains the buffered prefix first then continues from upstream.
+type bufferedBody struct {
+	upstream io.ReadCloser
+	buf      []byte // bytes already pulled from upstream
+	cap      int    // hard cap on total bytes we will pull
+	readPos  int    // for post-script Read draining of buf
+	closed   bool
+	eof      bool
+}
+
+func newBufferedBody(upstream io.ReadCloser, cap int) *bufferedBody {
+	if cap <= 0 {
+		cap = DefaultMaxBufBytes
+	}
+	return &bufferedBody{upstream: upstream, cap: cap}
+}
+
+// Peek returns up to n bytes from the start of the buffer. n < 0 returns all.
+func (b *bufferedBody) Peek(n int) []byte {
+	if n < 0 || n >= len(b.buf) {
+		return b.buf
+	}
+	return b.buf[:n]
+}
+
+// RequestMore pulls at least n more bytes from upstream into the buffer.
+// Returns the new buffer length, or io.EOF if upstream ended before n more
+// arrived. Subsequent calls after EOF immediately return EOF.
+func (b *bufferedBody) RequestMore(n int) (int, error) {
+	if b.eof {
+		return len(b.buf), io.EOF
+	}
+	if n <= 0 {
+		return len(b.buf), nil
+	}
+	if remaining := b.cap - len(b.buf); n > remaining {
+		n = remaining
+	}
+	if n <= 0 {
+		return len(b.buf), errors.New("buffer cap reached")
+	}
+
+	chunk := make([]byte, n)
+	got := 0
+	for got < n {
+		m, err := b.upstream.Read(chunk[got:])
+		if m > 0 {
+			got += m
+		}
+		if err == io.EOF {
+			b.buf = append(b.buf, chunk[:got]...)
+			b.eof = true
+			return len(b.buf), io.EOF
+		}
+		if err != nil {
+			b.buf = append(b.buf, chunk[:got]...)
+			return len(b.buf), err
+		}
+		if m == 0 {
+			break // defensive: shouldn't happen but avoid infinite loop
+		}
+	}
+	b.buf = append(b.buf, chunk[:got]...)
+	return len(b.buf), nil
+}
+
+// Read drains the buffered prefix first, then reads from upstream directly.
+// Used by copyResponse after a passthrough decision.
+func (b *bufferedBody) Read(p []byte) (int, error) {
+	if b.readPos < len(b.buf) {
+		n := copy(p, b.buf[b.readPos:])
+		b.readPos += n
+		return n, nil
+	}
+	if b.closed {
+		return 0, io.EOF
+	}
+	if b.eof {
+		return 0, io.EOF
+	}
+	return b.upstream.Read(p)
+}
+
+// Close closes the upstream body. Idempotent.
+func (b *bufferedBody) Close() error {
+	if b.closed {
+		return nil
+	}
+	b.closed = true
+	return b.upstream.Close()
+}
+
+// ── ApplyScript: glue the engine to an *http.Response ──────────────────────
+
+// ApplyScript wraps an upstream response with the given script. It pre-buffers
+// an initial prefix, runs on_response, and dispatches one of:
+//
+//   - passthrough: returns the original response with a wrapper body that
+//     continues to stream from upstream (existing prefix delivered first).
+//   - abort: closes upstream, returns a synthetic 499 with a small JSON body
+//     {"aborted":true,"reason":"…"}.
+//   - extract: continues reading until ExtractEnd is buffered, closes
+//     upstream, returns a response of the upstream status with body limited
+//     to buffer[ExtractStart:ExtractEnd]. Content-Length is rewritten and
+//     Content-Encoding / Transfer-Encoding are stripped since the body has
+//     been re-materialised as a plain byte slice.
+//
+// Initial buffer size and cumulative pull cap default to
+// DefaultInitialBufBytes / DefaultMaxBufBytes; pass 0 to use those.
+func ApplyScript(ctx context.Context, script *Script, resp *http.Response, initialBuf, maxBuf int) *http.Response {
+	if resp == nil || resp.Body == nil || script == nil {
+		return resp
+	}
+	if initialBuf <= 0 {
+		initialBuf = DefaultInitialBufBytes
+	}
+	if maxBuf <= 0 {
+		maxBuf = DefaultMaxBufBytes
+	}
+
+	bb := newBufferedBody(resp.Body, maxBuf)
+
+	// Pre-buffer; ignore EOF since the script can still decide on a short body.
+	if _, err := bb.RequestMore(initialBuf); err != nil && err != io.EOF {
+		slog.Warn("response script: pre-buffer error", "err", err)
+	}
+
+	decision, runErr := script.Run(ctx, resp.StatusCode, map[string][]string(resp.Header), bb.Peek, bb.RequestMore)
+	if runErr != nil {
+		slog.Warn("response script: runtime error, falling back to passthrough",
+			"script", script.name, "err", runErr)
+	}
+
+	switch decision.Action {
+	case ActionAbort:
+		_ = bb.Close()
+		return abortResponse(resp, decision.AbortReason)
+	case ActionExtract:
+		// Ensure we have enough buffered for the requested span.
+		if decision.ExtractEnd > len(bb.buf) {
+			need := decision.ExtractEnd - len(bb.buf)
+			_, _ = bb.RequestMore(need)
+		}
+		end := decision.ExtractEnd
+		if end > len(bb.buf) {
+			end = len(bb.buf)
+		}
+		start := decision.ExtractStart
+		if start > end {
+			start = end
+		}
+		// Defensive copy so closing the upstream doesn't invalidate the slice.
+		slice := append([]byte(nil), bb.buf[start:end]...)
+		_ = bb.Close()
+		return extractResponse(resp, slice)
+	default:
+		// Passthrough: re-attach the wrapper as the body. copyResponse will
+		// drain the prefix then continue from upstream.
+		resp.Body = bb
+		return resp
+	}
+}
+
+func abortResponse(orig *http.Response, reason string) *http.Response {
+	body := fmt.Sprintf(`{"aborted":true,"reason":%s}`, strconv.Quote(reason))
+	h := http.Header{
+		"Content-Type":   {"application/json"},
+		"Content-Length": {strconv.Itoa(len(body))},
+	}
+	if reason != "" {
+		h.Set("X-Gateway-Abort", reason)
+	}
+	return &http.Response{
+		StatusCode:    499, // 499 Client Closed Request (nginx convention, not std lib)
+		Status:        "499 Client Closed Request",
+		Proto:         orig.Proto,
+		ProtoMajor:    orig.ProtoMajor,
+		ProtoMinor:    orig.ProtoMinor,
+		Header:        h,
+		Body:          io.NopCloser(strings.NewReader(body)),
+		ContentLength: int64(len(body)),
+		Request:       orig.Request,
+	}
+}
+
+func extractResponse(orig *http.Response, slice []byte) *http.Response {
+	h := http.Header{}
+	for k, v := range orig.Header {
+		// Drop encodings — the body is now a plain byte slice.
+		if strings.EqualFold(k, "Content-Length") ||
+			strings.EqualFold(k, "Content-Encoding") ||
+			strings.EqualFold(k, "Transfer-Encoding") {
+			continue
+		}
+		h[k] = v
+	}
+	h.Set("Content-Length", strconv.Itoa(len(slice)))
+	h.Set("X-Gateway-Extract", "ok")
+	return &http.Response{
+		StatusCode:    orig.StatusCode,
+		Status:        orig.Status,
+		Proto:         orig.Proto,
+		ProtoMajor:    orig.ProtoMajor,
+		ProtoMinor:    orig.ProtoMinor,
+		Header:        h,
+		Body:          io.NopCloser(bytes.NewReader(slice)),
+		ContentLength: int64(len(slice)),
+		Request:       orig.Request,
 	}
 }

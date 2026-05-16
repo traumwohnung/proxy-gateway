@@ -1,9 +1,11 @@
 package utils
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -319,4 +321,221 @@ func TestRun_NoWatchdogLeak(t *testing.T) {
 	// If we leak a goroutine per Run, race detector would complain;
 	// pragmatic check is just that the loop completes without timeout.
 	_ = errors.New
+}
+
+// ── bufferedBody ───────────────────────────────────────────────────────────
+
+func TestBufferedBody_RequestMoreThenRead(t *testing.T) {
+	upstream := io.NopCloser(bytes.NewReader([]byte("abcdefghij"))) // 10 bytes
+	bb := newBufferedBody(upstream, 1024)
+
+	got, err := bb.RequestMore(4)
+	if err != nil {
+		t.Fatalf("RequestMore: %v", err)
+	}
+	if got != 4 || string(bb.Peek(-1)) != "abcd" {
+		t.Fatalf("after RequestMore(4): got=%d buf=%q", got, bb.Peek(-1))
+	}
+
+	// Read should drain buffered prefix then continue from upstream.
+	out := make([]byte, 100)
+	n, _ := bb.Read(out)
+	if n != 4 || string(out[:n]) != "abcd" {
+		t.Fatalf("Read prefix: n=%d %q", n, out[:n])
+	}
+	n, _ = bb.Read(out)
+	if n != 6 || string(out[:n]) != "efghij" {
+		t.Fatalf("Read tail: n=%d %q", n, out[:n])
+	}
+	if _, err := bb.Read(out); err != io.EOF {
+		t.Fatalf("want EOF, got %v", err)
+	}
+}
+
+func TestBufferedBody_EOFOnShortRequestMore(t *testing.T) {
+	bb := newBufferedBody(io.NopCloser(bytes.NewReader([]byte("abc"))), 1024)
+	_, err := bb.RequestMore(100)
+	if err != io.EOF {
+		t.Fatalf("want EOF, got %v; buf=%q", err, bb.Peek(-1))
+	}
+	if string(bb.Peek(-1)) != "abc" {
+		t.Fatalf("buf=%q", bb.Peek(-1))
+	}
+	// Second call after EOF should immediately EOF.
+	_, err = bb.RequestMore(1)
+	if err != io.EOF {
+		t.Fatalf("second call: want EOF, got %v", err)
+	}
+}
+
+func TestBufferedBody_HardCap(t *testing.T) {
+	bb := newBufferedBody(io.NopCloser(bytes.NewReader(bytes.Repeat([]byte("x"), 10000))), 100)
+	got, err := bb.RequestMore(50)
+	if err != nil || got != 50 {
+		t.Fatalf("first 50: got=%d err=%v", got, err)
+	}
+	got, err = bb.RequestMore(60) // exceeds 100 cap
+	if err != nil || got != 100 {
+		t.Fatalf("second 60: got=%d err=%v (want clamped to 100)", got, err)
+	}
+	_, err = bb.RequestMore(1) // already at cap
+	if err == nil {
+		t.Fatalf("want cap error, got nil")
+	}
+}
+
+func TestBufferedBody_CloseIdempotent(t *testing.T) {
+	closes := 0
+	upstream := &countingCloser{Reader: bytes.NewReader([]byte("x")), onClose: func() { closes++ }}
+	bb := newBufferedBody(upstream, 1024)
+	_ = bb.Close()
+	_ = bb.Close()
+	if closes != 1 {
+		t.Fatalf("want close called once, got %d", closes)
+	}
+}
+
+type countingCloser struct {
+	io.Reader
+	onClose func()
+}
+
+func (c *countingCloser) Close() error { c.onClose(); return nil }
+
+// ── ApplyScript end-to-end ─────────────────────────────────────────────────
+
+func makeResp(body string) *http.Response {
+	return &http.Response{
+		StatusCode:    200,
+		Status:        "200 OK",
+		Proto:         "HTTP/1.1",
+		ProtoMajor:    1,
+		ProtoMinor:    1,
+		Header:        http.Header{"Content-Type": {"text/html"}, "Content-Length": {"42"}},
+		Body:          io.NopCloser(strings.NewReader(body)),
+		ContentLength: int64(len(body)),
+	}
+}
+
+func readAll(t *testing.T, body io.ReadCloser) string {
+	t.Helper()
+	b, err := io.ReadAll(body)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	body.Close()
+	return string(b)
+}
+
+func TestApply_Passthrough_DeliversFullBody(t *testing.T) {
+	s, _ := Compile("pt", `def on_response(r): return r.passthrough()`)
+	resp := makeResp("hello world")
+	got := ApplyScript(context.Background(), s, resp, 0, 0)
+	if got.StatusCode != 200 {
+		t.Fatalf("status %d", got.StatusCode)
+	}
+	if body := readAll(t, got.Body); body != "hello world" {
+		t.Fatalf("body=%q", body)
+	}
+}
+
+func TestApply_Abort_Returns499AndClosesUpstream(t *testing.T) {
+	closed := false
+	upstream := &countingCloser{
+		Reader:  bytes.NewReader([]byte("blocked: geo.captcha-delivery.com/...")),
+		onClose: func() { closed = true },
+	}
+	resp := &http.Response{
+		StatusCode: 403, Status: "403 Forbidden",
+		Header: http.Header{}, Body: upstream,
+	}
+	src := `
+def on_response(r):
+    if r.scan(b"captcha-delivery.com") >= 0:
+        return r.abort("datadome")
+    return r.passthrough()
+`
+	s, err := Compile("ab", src)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	got := ApplyScript(context.Background(), s, resp, 0, 0)
+	if got.StatusCode != 499 {
+		t.Fatalf("status %d, want 499", got.StatusCode)
+	}
+	if !closed {
+		t.Fatalf("upstream not closed")
+	}
+	if got.Header.Get("X-Gateway-Abort") != "datadome" {
+		t.Fatalf("header=%q", got.Header.Get("X-Gateway-Abort"))
+	}
+	body := readAll(t, got.Body)
+	if !strings.Contains(body, `"aborted":true`) || !strings.Contains(body, `"datadome"`) {
+		t.Fatalf("body=%q", body)
+	}
+}
+
+func TestApply_Extract_ReturnsSliceOnly(t *testing.T) {
+	full := `lots of junk before __START__payload__END__lots more junk after`
+	resp := makeResp(full)
+	src := `
+def on_response(r):
+    s = r.scan(b"__START__")
+    if s < 0: return r.passthrough()
+    s += len(b"__START__")
+    e = r.scan(b"__END__", s)
+    if e < 0: return r.passthrough()
+    return r.extract(s, e)
+`
+	s, _ := Compile("ex", src)
+	got := ApplyScript(context.Background(), s, resp, 0, 0)
+	if body := readAll(t, got.Body); body != "payload" {
+		t.Fatalf("body=%q", body)
+	}
+	if got.Header.Get("Content-Length") != "7" {
+		t.Fatalf("Content-Length=%q", got.Header.Get("Content-Length"))
+	}
+	if got.Header.Get("Content-Encoding") != "" {
+		t.Fatalf("Content-Encoding should be stripped, got %q", got.Header.Get("Content-Encoding"))
+	}
+	if got.Header.Get("X-Gateway-Extract") != "ok" {
+		t.Fatalf("missing X-Gateway-Extract")
+	}
+}
+
+func TestApply_BodyConsumedBytes_AbortStopsAtBuffer(t *testing.T) {
+	// 1 MiB upstream; script aborts after seeing first byte. Verify the
+	// bufferedBody only pulled the initial pre-buffer.
+	upstream := make([]byte, 1024*1024)
+	for i := range upstream {
+		upstream[i] = 'x'
+	}
+	pulledBytes := 0
+	r := &readCounter{src: bytes.NewReader(upstream), n: &pulledBytes}
+	resp := &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(r)}
+	src := `def on_response(r): return r.abort("immediate")`
+	s, _ := Compile("ab", src)
+	_ = ApplyScript(context.Background(), s, resp, 4096, 0)
+	if pulledBytes > 8192 {
+		t.Fatalf("pulled %d bytes, expected ≤ initial pre-buffer (~4 KiB)", pulledBytes)
+	}
+}
+
+type readCounter struct {
+	src *bytes.Reader
+	n   *int
+}
+
+func (r *readCounter) Read(p []byte) (int, error) {
+	n, err := r.src.Read(p)
+	*r.n += n
+	return n, err
+}
+
+func TestApply_NilScript_ReturnsResponseUnchanged(t *testing.T) {
+	resp := makeResp("noop")
+	got := ApplyScript(context.Background(), nil, resp, 0, 0)
+	if got != resp {
+		t.Fatal("nil script should return same pointer")
+	}
 }

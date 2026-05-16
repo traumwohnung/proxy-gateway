@@ -24,6 +24,7 @@ require (
 	github.com/sardanioss/udpbara v1.1.0 // indirect
 	github.com/sardanioss/utls v1.10.3 // indirect
 	github.com/ua-parser/uap-go v0.0.0-20251207011819-db9adb27a0b8 // indirect
+	go.starlark.net v0.0.0-20260326113308-fadfc96def35 // indirect
 	golang.org/x/crypto v0.50.0 // indirect
 	golang.org/x/mod v0.34.0 // indirect
 	golang.org/x/net v0.53.0 // indirect

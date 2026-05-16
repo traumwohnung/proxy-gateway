@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"path/filepath"
 	"time"
 
@@ -113,12 +114,34 @@ func buildProxysetRouter(cfg *Config, configDir string) (proxykit.Handler, error
 		}
 		// Tag the source with its provider type so emission downstream knows
 		// which upstream produced this binding. Captured by value so each set
-		// gets its own closure.
+		// gets its own closure. defaultScript is the per-set fallback used
+		// when the username doesn't carry response_script.
 		provider := raw.SourceType
+		defaultScript := raw.compiledScript
 		baseSrc := src
 		sources[raw.Name] = proxykit.HandlerFunc(func(ctx context.Context, req *proxykit.Request) (*proxykit.Result, error) {
 			ctx = utils.WithProviderName(ctx, provider)
-			return baseSrc.Resolve(ctx, req)
+			result, err := baseSrc.Resolve(ctx, req)
+			if err != nil || result == nil {
+				return result, err
+			}
+			// Resolve the script: per-call override (from username) > per-set
+			// default > none. Only wires a hook when one is present.
+			script := getResponseScript(ctx)
+			if script == nil {
+				script = defaultScript
+			}
+			if script != nil {
+				prev := result.ResponseHook
+				hookCtx := ctx
+				result.ResponseHook = func(resp *http.Response) *http.Response {
+					if prev != nil {
+						resp = prev(resp)
+					}
+					return utils.ApplyScript(hookCtx, script, resp, 0, 0)
+				}
+			}
+			return result, nil
 		})
 	}
 
