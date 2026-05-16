@@ -6,9 +6,9 @@ module that may define one or more known entry-point functions. Today the
 only recognised entry point is `response_bailing(r)`. Future ones (e.g.
 `request_modify(req)`, `response_modify(resp)`) will land alongside it.
 
-This guide focuses on bail — the current capability.
+This guide focuses on response_bailing — the current capability.
 
-## What bail can do
+## What response_bailing can do
 
 `response_bailing(r)` answers one question after the gateway has buffered each new
 chunk of upstream data on a MITM'd response:
@@ -16,7 +16,7 @@ chunk of upstream data on a MITM'd response:
 > "Should we close the upstream connection now?"
 
 It can't transform the body, rewrite headers, or change the status code.
-The only side effect of a bail is: stop reading from upstream, deliver
+The only side effect of a response_bailing call is: stop reading from upstream, deliver
 whatever was already received, add one informational response header.
 
 ## Prerequisites
@@ -37,7 +37,7 @@ Top-level `[[script]]` table entries define named, reusable scripts.
 [[script]]
 name = "antibot"
 source = """
-DD = regex(rb'(?:geo\\.captcha-delivery\\.com|datadome\\.cid)')
+DD = Regex.new(rb'(?:geo\\.captcha-delivery\\.com|datadome\\.cid)')
 
 def response_bailing(r):
     if DD.test(r.peek()):
@@ -60,7 +60,7 @@ default_scripts = ["antibot", "skip_large"]
 ```
 
 - All `[[script]]` entries are compiled at config load. Bad source → boot fail.
-- A script that defines no recognised entry point (e.g. `bail`) is rejected
+- A script that defines no recognised entry point (e.g. `response_bailing`) is rejected
   at compile time. This catches typos like `def ball(r): ...`.
 - `default_scripts` lists names. Unknown names → boot fail.
 - Order in `default_scripts` is the order they're invoked.
@@ -97,7 +97,7 @@ Each entry is one of:
   per-set chain, include the named refs explicitly:
   `"scripts": ["antibot", "skip_large", { "kind": "source", "source": "..." }]`.
 
-## Lifecycle of the bail chain
+## Lifecycle of the response_bailing chain
 
 1. Upstream returns response headers + starts producing body.
 2. For each script in the chain, in order, invoke its `response_bailing(r)` with
@@ -110,12 +110,12 @@ Each entry is one of:
 5. If no script bails in this round, pull the next chunk (8 KiB default)
    and repeat from step 2.
 6. Loop ends when: a script bails / cumulative buffer hits the release cap
-   (1 MiB default) / upstream EOFs. On cap-reached and EOF without bail
+   (1 MiB default) / upstream EOFs. On cap-reached and EOF without a bail decision
    the response streams through unchanged.
 
 **Short-circuit rule for v1**: as soon as one script bails, no further
-scripts' `bail()` runs (for this request). Future modify phases will run
-all scripts in order regardless of bail.
+scripts' `response_bailing()` runs (for this request). Future modify phases will run
+all scripts in order regardless of any bail decision.
 
 ## The `r` argument
 
@@ -138,14 +138,14 @@ all scripts in order regardless of bail.
 
 ## Predeclared host builtins
 
-### `regex(pattern)`
+### `Regex.new(pattern)`
 
 Compile a regex once (typically as a module-level constant so it lands in
 frozen globals). RE2-based — no backreferences, no lookarounds, linear-time
 guaranteed.
 
 ```python
-DD = regex(rb'geo\.captcha-delivery\.com')
+DD = Regex.new(rb'geo\.captcha-delivery\.com')
 
 def response_bailing(r):
     if DD.test(r.peek()):
@@ -163,15 +163,15 @@ Methods on the returned object:
 
 Inputs accept both `bytes` and `str`. Patterns capped at 4 KiB.
 
-### `xpath(expression)`
+### `Xpath.new(expression)`
 
 Compile an XPath expression once and reuse it. Best-effort HTML parser is
 tolerant of partial / malformed markup (which is what scrapes usually see
 mid-stream).
 
 ```python
-TITLE   = xpath("//title")
-CAPTCHA = xpath('//div[contains(@class,"captcha") or contains(@id,"captcha")]')
+TITLE   = Xpath.new("//title")
+CAPTCHA = Xpath.new('//div[contains(@class,"captcha") or contains(@id,"captcha")]')
 
 def response_bailing(r):
     if CAPTCHA.test(r.peek()):
@@ -199,27 +199,27 @@ on malformed input so scripts can use them defensively without try/except.
 
 | Builtin                  | Returns           | Notes                                                                |
 | ------------------------ | ----------------- | -------------------------------------------------------------------- |
-| `json_decode(input)`     | scalar / list / dict / `None` | Whole-number JSON floats are promoted to `int`. Returns `None` on malformed input. |
-| `json_encode(value)`     | `bytes`           | Canonical JSON. `bytes` are encoded as strings.                      |
-| `base64_decode(input)`   | `bytes` / `None`  | Accepts both std and URL-safe alphabets, padded or not.              |
-| `base64_encode(input)`   | `str`             | Standard padded encoding.                                            |
-| `url_decode(input)`      | `str` / `None`    | Percent-decoded (form-style; `+` → space).                           |
-| `url_encode(input)`      | `str`             | Percent-encoded (form-style).                                        |
+| `Json.decode(input)`     | scalar / list / dict / `None` | Whole-number JSON floats are promoted to `int`. Returns `None` on malformed input. |
+| `Json.encode(value)`     | `bytes`           | Canonical JSON. `bytes` are encoded as strings.                      |
+| `Base64.decode(input)`   | `bytes` / `None`  | Accepts both std and URL-safe alphabets, padded or not.              |
+| `Base64.encode(input)`   | `str`             | Standard padded encoding.                                            |
+| `Url.decode(input)`      | `str` / `None`    | Percent-decoded (form-style; `+` → space).                           |
+| `Url.encode(input)`      | `str`             | Percent-encoded (form-style).                                        |
 
 Example patterns:
 
 ```python
 # Bail on a JSON error body
 def response_bailing(r):
-    body = json_decode(r.peek())
+    body = Json.decode(r.peek())
     if body != None and body.get("status") == "blocked":
         return body.get("reason", "blocked")
 
 # Bail when a base64 antibot payload appears
-DD = regex(rb'dd_b64="([A-Za-z0-9+/=]+)"')
+DD = Regex.new(rb'dd_b64="([A-Za-z0-9+/=]+)"')
 def response_bailing(r):
     m = DD.find(r.peek())
-    if m != None and base64_decode(m[8:-1]) != None:
+    if m != None and Base64.decode(m[8:-1]) != None:
         return "datadome_embedded"
 ```
 
@@ -228,7 +228,7 @@ def response_bailing(r):
 ### Anti-bot detection
 
 ```python
-ANTIBOT = regex(rb'(?:geo\.captcha-delivery\.com|datadome\.cid|__cf_bm|<title>\s*Just a moment)')
+ANTIBOT = Regex.new(rb'(?:geo\.captcha-delivery\.com|datadome\.cid|__cf_bm|<title>\s*Just a moment)')
 
 def response_bailing(r):
     if ANTIBOT.test(r.peek()):
@@ -255,7 +255,7 @@ def response_bailing(r):
 ### Bail once a needed JSON blob has appeared
 
 ```python
-END = regex(rb'window\["__UFRN_LIFECYCLE_SERVERREQUEST__"\]=JSON\.parse\("[^"]*"\)')
+END = Regex.new(rb'window\["__UFRN_LIFECYCLE_SERVERREQUEST__"\]=JSON\.parse\("[^"]*"\)')
 
 def response_bailing(r):
     if END.test(r.peek()):
@@ -266,9 +266,9 @@ def response_bailing(r):
 
 ```python
 MARKERS = {
-    'datadome':    regex(rb'geo\.captcha-delivery\.com'),
-    'cloudflare':  regex(rb'__cf_bm|<title>\s*Just a moment'),
-    'perimeterx':  regex(rb'PerimeterX'),
+    'datadome':    Regex.new(rb'geo\.captcha-delivery\.com'),
+    'cloudflare':  Regex.new(rb'__cf_bm|<title>\s*Just a moment'),
+    'perimeterx':  Regex.new(rb'PerimeterX'),
 }
 
 def response_bailing(r):
@@ -290,7 +290,7 @@ source = "def response_bailing(r): return 'client_error' if 400 <= r.status < 50
 [[script]]
 name = "antibot_full_html_scan"
 source = """
-ANTIBOT = regex(rb'(?:datadome|cf-chl-bypass|PerimeterX){1,3}')
+ANTIBOT = Regex.new(rb'(?:datadome|cf-chl-bypass|PerimeterX){1,3}')
 def response_bailing(r):
     if ANTIBOT.test(r.peek()):
         return 'antibot'
@@ -342,8 +342,8 @@ bails, the heavier regex scan never runs.
 | Limit                                       | Default       | Where it lives                       |
 | ------------------------------------------- | ------------- | ------------------------------------ |
 | Inline script source size                   | 32 KiB        | `MaxScriptSize`                      |
-| Starlark execution steps per `bail()` call  | 100 000       | `MaxExecSteps`                       |
-| Wall-clock per `bail()` call                | 50 ms         | `MaxWallClock`                       |
+| Starlark execution steps per `response_bailing()` call  | 100 000       | `MaxExecSteps`                       |
+| Wall-clock per `response_bailing()` call                | 50 ms         | `MaxWallClock`                       |
 | Chunk size pulled between calls             | 8 KiB         | `DefaultChunkBytes`                  |
 | Release cap (buffer ceiling per request)    | 1 MiB         | `DefaultReleaseCapBytes`             |
 | Regex pattern size                          | 4 KiB         | `MaxRegexPatternSize`                |

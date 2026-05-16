@@ -21,7 +21,7 @@ func runReturn(t *testing.T, src string) string {
 func TestBuiltin_JsonDecode_Object(t *testing.T) {
 	got := runReturn(t, `
 def response_bailing(r):
-    d = json_decode(b'{"a":1,"b":"hi","c":true,"d":null,"e":[1,2]}')
+    d = Json.decode(b'{"a":1,"b":"hi","c":true,"d":null,"e":[1,2]}')
     if d["a"] != 1: fail("a")
     if d["b"] != "hi": fail("b")
     if d["c"] != True: fail("c")
@@ -37,7 +37,7 @@ def response_bailing(r):
 func TestBuiltin_JsonDecode_Malformed_ReturnsNone(t *testing.T) {
 	got := runReturn(t, `
 def response_bailing(r):
-    return "none" if json_decode(b"{not json") == None else "parsed"
+    return "none" if Json.decode(b"{not json") == None else "parsed"
 `)
 	if got != "none" {
 		t.Fatalf("got %q", got)
@@ -47,7 +47,7 @@ def response_bailing(r):
 func TestBuiltin_JsonDecode_Float(t *testing.T) {
 	got := runReturn(t, `
 def response_bailing(r):
-    v = json_decode(b'3.14')
+    v = Json.decode(b'3.14')
     return str(v)
 `)
 	if got != "3.14" {
@@ -58,7 +58,7 @@ def response_bailing(r):
 func TestBuiltin_JsonDecode_AcceptsString(t *testing.T) {
 	got := runReturn(t, `
 def response_bailing(r):
-    return str(json_decode('[1,2,3]'))
+    return str(Json.decode('[1,2,3]'))
 `)
 	if got != "[1, 2, 3]" {
 		t.Fatalf("got %q", got)
@@ -69,8 +69,8 @@ func TestBuiltin_JsonEncode_RoundTrip(t *testing.T) {
 	got := runReturn(t, `
 def response_bailing(r):
     payload = {"k": [1, 2, "x"], "b": True}
-    encoded = json_encode(payload)
-    decoded = json_decode(encoded)
+    encoded = Json.encode(payload)
+    decoded = Json.decode(encoded)
     return "ok" if decoded["k"] == [1, 2, "x"] and decoded["b"] == True else "fail"
 `)
 	if got != "ok" {
@@ -81,7 +81,7 @@ def response_bailing(r):
 // ── base64_decode / base64_encode ────────────────────────────────────────
 
 func TestBuiltin_Base64Encode(t *testing.T) {
-	got := runReturn(t, `def response_bailing(r): return base64_encode(b"hello")`)
+	got := runReturn(t, `def response_bailing(r): return Base64.encode(b"hello")`)
 	if got != "aGVsbG8=" {
 		t.Fatalf("got %q", got)
 	}
@@ -90,7 +90,7 @@ func TestBuiltin_Base64Encode(t *testing.T) {
 func TestBuiltin_Base64Decode(t *testing.T) {
 	got := runReturn(t, `
 def response_bailing(r):
-    v = base64_decode("aGVsbG8=")
+    v = Base64.decode("aGVsbG8=")
     return str(len(v))
 `)
 	if got != "5" {
@@ -101,7 +101,7 @@ def response_bailing(r):
 func TestBuiltin_Base64Decode_AcceptsURLSafe(t *testing.T) {
 	got := runReturn(t, `
 def response_bailing(r):
-    v = base64_decode("YS1iX2M-ZA==")  # url-safe alphabet
+    v = Base64.decode("YS1iX2M-ZA==")  # url-safe alphabet
     return "ok" if v != None else "fail"
 `)
 	if got != "ok" {
@@ -112,7 +112,7 @@ def response_bailing(r):
 func TestBuiltin_Base64Decode_Malformed_None(t *testing.T) {
 	got := runReturn(t, `
 def response_bailing(r):
-    return "none" if base64_decode("####not_base64") == None else "parsed"
+    return "none" if Base64.decode("####not_base64") == None else "parsed"
 `)
 	if got != "none" {
 		t.Fatalf("got %q", got)
@@ -122,14 +122,14 @@ def response_bailing(r):
 // ── url_decode / url_encode ──────────────────────────────────────────────
 
 func TestBuiltin_UrlEncode(t *testing.T) {
-	got := runReturn(t, `def response_bailing(r): return url_encode("hello world & more")`)
+	got := runReturn(t, `def response_bailing(r): return Url.encode("hello world & more")`)
 	if got != "hello+world+%26+more" {
 		t.Fatalf("got %q", got)
 	}
 }
 
 func TestBuiltin_UrlDecode(t *testing.T) {
-	got := runReturn(t, `def response_bailing(r): return url_decode("hello%20world%21")`)
+	got := runReturn(t, `def response_bailing(r): return Url.decode("hello%20world%21")`)
 	if got != "hello world!" {
 		t.Fatalf("got %q", got)
 	}
@@ -138,7 +138,7 @@ func TestBuiltin_UrlDecode(t *testing.T) {
 func TestBuiltin_UrlDecode_Malformed_None(t *testing.T) {
 	got := runReturn(t, `
 def response_bailing(r):
-    return "none" if url_decode("%ZZ") == None else "parsed"
+    return "none" if Url.decode("%ZZ") == None else "parsed"
 `)
 	if got != "none" {
 		t.Fatalf("got %q", got)
@@ -149,7 +149,7 @@ def response_bailing(r):
 
 func TestBuiltin_Xpath_QueryTitle(t *testing.T) {
 	src := `
-TITLE = xpath("//title")
+TITLE = Xpath.new("//title")
 def response_bailing(r):
     nodes = TITLE.query(b"<html><head><title>hello</title></head></html>")
     if len(nodes) != 1: fail("count")
@@ -163,7 +163,7 @@ def response_bailing(r):
 
 func TestBuiltin_Xpath_TestShorthand(t *testing.T) {
 	src := `
-P = xpath('//div[@class="captcha"]')
+P = Xpath.new('//div[@class="captcha"]')
 def response_bailing(r):
     if P.test(b'<html><body><div class="captcha">x</div></body></html>'):
         return "match"
@@ -176,7 +176,7 @@ def response_bailing(r):
 
 func TestBuiltin_Xpath_NoMatch_ReturnsEmpty(t *testing.T) {
 	src := `
-P = xpath("//missing")
+P = Xpath.new("//missing")
 def response_bailing(r):
     nodes = P.query(b"<html></html>")
     return str(len(nodes))
@@ -189,7 +189,7 @@ def response_bailing(r):
 func TestBuiltin_Xpath_TolerantOfPartialHTML(t *testing.T) {
 	// Truncated mid-tag — htmlquery should still parse what it can.
 	src := `
-TITLE = xpath("//title")
+TITLE = Xpath.new("//title")
 def response_bailing(r):
     nodes = TITLE.query(b"<html><head><title>blocked</title><script>incomplete")
     return str(len(nodes))
@@ -200,7 +200,7 @@ def response_bailing(r):
 }
 
 func TestBuiltin_Xpath_BadExpression_CompileError(t *testing.T) {
-	_, err := Compile("bad", `BAD = xpath("//[invalid")
+	_, err := Compile("bad", `BAD = Xpath.new("//[invalid")
 def response_bailing(r): return None`)
 	if err == nil || !strings.Contains(err.Error(), "xpath") {
 		t.Fatalf("want xpath compile error, got %v", err)
@@ -209,7 +209,7 @@ def response_bailing(r): return None`)
 
 func TestBuiltin_Xpath_OversizedExpression_CompileError(t *testing.T) {
 	big := "//x[contains(., '" + strings.Repeat("a", MaxXPathExprSize) + "')]"
-	src := "BAD = xpath(\"" + big + "\")\ndef response_bailing(r): return None\n"
+	src := "BAD = Xpath.new(\"" + big + "\")\ndef response_bailing(r): return None\n"
 	_, err := Compile("oversize", src)
 	if err == nil || !strings.Contains(err.Error(), "exceeds limit") {
 		t.Fatalf("want size error, got %v", err)
@@ -221,7 +221,7 @@ func TestBuiltin_Xpath_OversizedExpression_CompileError(t *testing.T) {
 func TestBuiltin_JsonBail_RealisticBody(t *testing.T) {
 	src := `
 def response_bailing(r):
-    parsed = json_decode(r.peek())
+    parsed = Json.decode(r.peek())
     if parsed != None and parsed.get("status") == "blocked":
         return parsed.get("reason", "blocked")
     return None
@@ -234,7 +234,7 @@ def response_bailing(r):
 
 func TestBuiltin_XpathBail_FindsAntibotMarker(t *testing.T) {
 	src := `
-CAPTCHA = xpath('//div[contains(@class,"captcha") or contains(@id,"captcha")]')
+CAPTCHA = Xpath.new('//div[contains(@class,"captcha") or contains(@id,"captcha")]')
 
 def response_bailing(r):
     if CAPTCHA.test(r.peek()):

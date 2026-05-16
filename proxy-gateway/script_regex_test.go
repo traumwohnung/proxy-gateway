@@ -9,11 +9,11 @@ import (
 	"testing"
 )
 
-// ── regex() compile + script-init use ─────────────────────────────────────
+// ── Regex.new() compile + script-init use ─────────────────────────────────────
 
 func TestRegex_CompiledAtInitAndUsedInBail(t *testing.T) {
 	src := `
-DD = regex(rb'geo\.captcha-delivery\.com')
+DD = Regex.new(rb'geo\.captcha-delivery\.com')
 
 def response_bailing(r):
     if DD.test(r.peek()):
@@ -31,7 +31,7 @@ def response_bailing(r):
 
 func TestRegex_NoMatch_ReturnsContinue(t *testing.T) {
 	src := `
-P = regex(rb'BLOCK')
+P = Regex.new(rb'BLOCK')
 def response_bailing(r):
     if P.test(r.peek()):
         return 'block'
@@ -45,7 +45,7 @@ def response_bailing(r):
 
 func TestRegex_AcceptsStringPattern(t *testing.T) {
 	src := `
-P = regex('foo|bar')
+P = Regex.new('foo|bar')
 def response_bailing(r):
     return 'hit' if P.test(r.peek()) else None
 `
@@ -57,7 +57,7 @@ def response_bailing(r):
 
 func TestRegex_BadPatternFailsAtCompile(t *testing.T) {
 	src := `
-P = regex(rb'(unclosed')
+P = Regex.new(rb'(unclosed')
 def response_bailing(r): return None
 `
 	_, err := Compile(t.Name(), src)
@@ -68,7 +68,7 @@ def response_bailing(r): return None
 
 func TestRegex_OversizedPatternFailsAtCompile(t *testing.T) {
 	big := strings.Repeat("a", MaxRegexPatternSize+1)
-	src := "P = regex(b'" + big + "')\ndef response_bailing(r): return None\n"
+	src := "P = Regex.new(b'" + big + "')\ndef response_bailing(r): return None\n"
 	_, err := Compile(t.Name(), src)
 	if err == nil || !strings.Contains(err.Error(), "exceeds limit") {
 		t.Fatalf("want size error, got %v", err)
@@ -79,7 +79,7 @@ func TestRegex_OversizedPatternFailsAtCompile(t *testing.T) {
 
 func TestRegex_SearchReturnsOffset(t *testing.T) {
 	src := `
-P = regex(rb'needle')
+P = Regex.new(rb'needle')
 def response_bailing(r):
     idx = P.search(r.peek())
     return str(idx)
@@ -92,7 +92,7 @@ def response_bailing(r):
 
 func TestRegex_SearchReturnsMinus1OnMiss(t *testing.T) {
 	src := `
-P = regex(rb'absent')
+P = Regex.new(rb'absent')
 def response_bailing(r):
     return str(P.search(r.peek()))
 `
@@ -104,7 +104,7 @@ def response_bailing(r):
 
 func TestRegex_SearchHonoursStart(t *testing.T) {
 	src := `
-P = regex(rb'aa')
+P = Regex.new(rb'aa')
 def response_bailing(r):
     # first match at 0, but we skip it
     return str(P.search(r.peek(), 1))
@@ -119,7 +119,7 @@ def response_bailing(r):
 
 func TestRegex_FindReturnsMatchedBytes(t *testing.T) {
 	src := `
-P = regex(rb'"id":"[A-Z]+"')
+P = Regex.new(rb'"id":"[A-Z]+"')
 def response_bailing(r):
     m = P.find(r.peek())
     if m == None:
@@ -135,7 +135,7 @@ def response_bailing(r):
 
 func TestRegex_FindReturnsNoneOnMiss(t *testing.T) {
 	src := `
-P = regex(rb'absent')
+P = Regex.new(rb'absent')
 def response_bailing(r):
     m = P.find(r.peek())
     return 'none' if m == None else 'hit'
@@ -148,7 +148,7 @@ def response_bailing(r):
 
 func TestRegex_FindAllReturnsList(t *testing.T) {
 	src := `
-P = regex(rb'\d+')
+P = Regex.new(rb'\d+')
 def response_bailing(r):
     ms = P.find_all(r.peek())
     return str(len(ms))
@@ -171,7 +171,7 @@ func TestApply_RegexBailOnLaterChunk(t *testing.T) {
 		Body: io.NopCloser(bytes.NewReader([]byte(full))),
 	}
 	src := `
-MARKER = regex(rb'__UFRN_LIFECYCLE_SERVERREQUEST__')
+MARKER = Regex.new(rb'__UFRN_LIFECYCLE_SERVERREQUEST__')
 def response_bailing(r):
     if MARKER.test(r.peek()):
         return 'have_blob'
@@ -190,7 +190,7 @@ func TestRegex_NoCatastrophicBacktracking(t *testing.T) {
 	// Pattern + haystack that would explode under PCRE backtracking. RE2
 	// linear-time guarantee means this completes quickly.
 	src := `
-P = regex(rb'(a+)+b')
+P = Regex.new(rb'(a+)+b')
 def response_bailing(r):
     return 'hit' if P.test(r.peek()) else 'miss'
 `
