@@ -83,7 +83,7 @@ func (d *SOCKS5Downstream) handleConn(conn net.Conn, handler Handler) {
 		slog.Error("SOCKS5 upstream dial failed", "target", target, "err", err)
 		sendSOCKS5Reply(conn, 0x05) // connection refused
 		if result.ConnTracker != nil {
-			result.ConnTracker.Close(0, 0)
+			result.ConnTracker.Close(0, 0, "upstream_err")
 		}
 		return
 	}
@@ -99,7 +99,7 @@ func (d *SOCKS5Downstream) handleConn(conn net.Conn, handler Handler) {
 
 	sent, received := relay(conn, upstreamConn, result.ConnTracker)
 	if result.ConnTracker != nil {
-		result.ConnTracker.Close(sent, received)
+		result.ConnTracker.Close(sent, received, "ok")
 	}
 }
 

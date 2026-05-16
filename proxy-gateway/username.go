@@ -69,10 +69,16 @@ type ctxKey int
 
 const (
 	ctxSet ctxKey = iota
-	ctxAffinityJSON
 	ctxHTTPCloakPreset
 	ctxMinutes
 )
+
+// Note: session_params_hash, canonical session params JSON, and provider name
+// all live on the utils-side context (proxy-kit/utils) because the
+// SessionManager and downstream proxy-kit middleware need to read them
+// without a dependency on the gateway package. The gateway sets them in
+// ParseJSONCreds / buildProxysetRouter and reads them back via the
+// utils.Get* accessors. Don't add a gateway-side duplicate.
 
 func withMinutes(ctx context.Context, m int) context.Context {
 	return context.WithValue(ctx, ctxMinutes, m)
@@ -89,15 +95,6 @@ func withSet(ctx context.Context, set string) context.Context {
 
 func getSet(ctx context.Context) string {
 	v, _ := ctx.Value(ctxSet).(string)
-	return v
-}
-
-func withAffinityJSON(ctx context.Context, json string) context.Context {
-	return context.WithValue(ctx, ctxAffinityJSON, json)
-}
-
-func getAffinityJSON(ctx context.Context) string {
-	v, _ := ctx.Value(ctxAffinityJSON).(string)
 	return v
 }
 
@@ -127,11 +124,16 @@ func ParseJSONCreds(next proxykit.Handler) proxykit.Handler {
 		}
 
 		ctx = withSet(ctx, u.Affinity.Set)
-		ctx = withAffinityJSON(ctx, u.Affinity.CanonicalJSON())
 		ctx = withMinutes(ctx, u.Minutes)
 		ctx = utils.WithSeedTTL(ctx, time.Duration(u.Minutes)*time.Minute)
 		ctx = utils.WithTopLevelSeed(ctx, u.Affinity.Seed())
 		ctx = utils.WithSessionLabel(ctx, u.Raw)
+		// Analytics fields live on the utils-side context so SessionManager
+		// (in proxy-kit) and trackUsage (in this package) both read them
+		// from a single source of truth.
+		ctx = utils.WithSessionParamsHash(ctx, u.Affinity.Hash())
+		ctx = utils.WithSessionParamsJSON(ctx, u.Affinity.CanonicalJSON())
+		ctx = utils.WithProxysetName(ctx, u.Affinity.Set)
 		ctx = withHTTPCloakSpec(ctx, u.Httpcloak)
 
 		return next.Resolve(ctx, req)

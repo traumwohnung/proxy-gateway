@@ -6,22 +6,85 @@ import "google/protobuf/timestamp.proto";
 
 option go_package = "proxy-gateway/analytics/gen/ingest/v1;ingestv1";
 
-// Ingest is the write-only API the proxy-gateway uses to push usage data.
+// Ingest is the write-only API the proxy-gateway uses to push observability
+// events. Events are streamed and the server is fire-and-forget from the
+// gateway's perspective.
 service Ingest {
-  // RecordUsage streams one UsageDelta per closed connection.
-  rpc RecordUsage(stream UsageDelta) returns (RecordUsageAck) {}
+  // RecordEvents streams Event messages. Each Event carries one variant in
+  // its `payload` oneof. event_id is the idempotency key; the server uses
+  // INSERT OR IGNORE on it.
+  rpc RecordEvents(stream Event) returns (RecordAck) {}
 }
 
-message UsageDelta {
-  // Wall-clock timestamp when the connection closed.
-  google.protobuf.Timestamp timestamp = 1;
+message Event {
+  // Wall-clock timestamp when the event was produced on the gateway.
+  google.protobuf.Timestamp ts = 1;
+  // Gateway-generated ULID, used as the idempotency key in raw_events.
+  string event_id = 2;
+
+  oneof payload {
+    ConnectionClosed connection_closed = 10;
+    EpochTransition epoch_transition = 11;
+    DropReport drop_report = 12;
+    MitmRequest mitm_request = 13;  // reserved, not emitted yet
+  }
+}
+
+// ConnectionClosed is emitted once per outbound connection that finished.
+message ConnectionClosed {
+  string connection_id = 1;
   string proxyset = 2;
-  // Canonical JSON encoding of the session parameters (formerly affinity).
-  string session_params = 3;
-  // Configured session duration in minutes (0 = no affinity, 1..1440 = sticky).
-  int32 session_duration_minutes = 4;
-  int64 upload_bytes = 5;
-  int64 download_bytes = 6;
+  string provider = 3;
+  // First 16 bytes of SHA-256 over the canonical JSON of the session params,
+  // lowercase hex (32 chars). Canonical form: keys sorted, no whitespace,
+  // numbers in their natural JSON form. The gateway computes this locally.
+  string session_params_hash = 4;
+  int32 session_duration_minutes = 5;
+  // Which IP-binding generation this connection belongs to. 0 = initial.
+  int32 epoch = 6;
+  string upstream_ip = 7;
+  string sni = 8;
+  // ok|client_close|upstream_err|timeout|auth_fail
+  string close_reason = 9;
+  int64 upload_bytes = 10;
+  int64 download_bytes = 11;
+  int64 duration_ms = 12;
 }
 
-message RecordUsageAck {}
+// EpochTransition is emitted whenever the IP bound to a logical session
+// changes. The very first binding is also a transition (start_reason =
+// "first_bind", prev_epoch = -1).
+message EpochTransition {
+  string session_params_hash = 1;
+  // Canonical JSON of the session params. Populated on first_bind so the
+  // ingest server can backfill session_params_dim.params_json. May be empty
+  // on subsequent transitions.
+  string params_json = 2;
+  string proxyset = 3;
+  string provider = 4;
+  int32 prev_epoch = 5;  // -1 on first_bind
+  int32 new_epoch = 6;
+  string prev_ip = 7;  // empty on first_bind
+  string new_ip = 8;
+  // first_bind|ttl|forced|burned|upstream_5xx|client_signal|pool_reshuffle
+  string start_reason = 9;
+}
+
+// DropReport surfaces silent loss caused by the gateway's bounded send queue
+// filling up. Emitted periodically so dashboards can show known data loss.
+message DropReport {
+  int64 dropped_events = 1;
+  google.protobuf.Timestamp window_start = 2;
+  google.protobuf.Timestamp window_end = 3;
+}
+
+// MitmRequest is reserved for the MITM feature. The variant exists so adding
+// emission later is non-breaking; the field set will be designed when MITM
+// goes to production.
+message MitmRequest {
+  // Placeholder. No fields populated yet.
+}
+
+message RecordAck {
+  uint64 accepted = 1;
+}

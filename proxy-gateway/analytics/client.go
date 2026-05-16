@@ -1,12 +1,20 @@
-// Package analytics is a thin gRPC client that streams UsageDelta messages
+// Package analytics is a thin gRPC client that streams observability Events
 // to the analytics-service. It is write-only: the gateway never reads back.
+//
+// The wire protocol carries one Event per message, each with a oneof payload
+// (ConnectionClosed, EpochTransition, DropReport, MitmRequest). The gateway
+// produces those variants via the typed Send* methods below; this file
+// handles only transport (queue, reconnect, drop accounting).
 package analytics
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc"
@@ -17,34 +25,64 @@ import (
 	ingestv1 "proxy-gateway/analytics/gen/ingest/v1"
 )
 
-// Delta is a single usage record handed to the client — one per closed
-// connection.
-type Delta struct {
+// ConnectionClosed is the gateway-facing shape for the variant of the same
+// name in the proto. Field names mirror the proto exactly.
+type ConnectionClosed struct {
 	Timestamp              time.Time
+	ConnectionID           string
 	Proxyset               string
-	SessionParams          string // raw JSON
+	Provider               string
+	SessionParamsHash      string
 	SessionDurationMinutes int32
+	Epoch                  int32
+	UpstreamIP             string
+	SNI                    string
+	CloseReason            string
 	UploadBytes            int64
 	DownloadBytes          int64
+	DurationMs             int64
 }
 
-// Client maintains a long-lived RecordUsage stream with reconnect-with-backoff
-// and a bounded send queue. Send is non-blocking — when the queue is full the
-// delta is dropped and a warning is logged. The gateway hot path must never
-// stall on analytics.
+// EpochTransition is the gateway-facing shape for the EpochTransition
+// variant. PrevEpoch is -1 on first_bind; PrevIP empty on first_bind.
+type EpochTransition struct {
+	Timestamp         time.Time
+	SessionParamsHash string
+	ParamsJSON        string
+	Proxyset          string
+	Provider          string
+	PrevEpoch         int32
+	NewEpoch          int32
+	PrevIP            string
+	NewIP             string
+	StartReason       string
+}
+
+// Client maintains a long-lived RecordEvents stream with reconnect+backoff
+// and a bounded send queue. Send* are non-blocking — when the queue is full
+// the event is dropped and the drop counter is incremented. The gateway hot
+// path must never stall on analytics.
 type Client struct {
 	addr  string
 	token string
 
-	queue chan *ingestv1.UsageDelta
+	queue chan *ingestv1.Event
+	cc    *grpc.ClientConn
 
-	cc *grpc.ClientConn
+	// Drop accounting. A background goroutine periodically emits a
+	// DropReport variant carrying the running count over a window.
+	droppedSinceReport atomic.Int64
+	dropWindowStart    atomic.Int64 // unix seconds
 
 	wg     sync.WaitGroup
 	cancel context.CancelFunc
 }
 
-const queueCapacity = 4096
+const (
+	queueCapacity        = 4096
+	dropReportInterval   = 60 * time.Second
+	dropReportMinDropped = 1
+)
 
 // Dial constructs a Client and starts its background sender. Returns nil and
 // logs if addr is empty (analytics disabled).
@@ -62,32 +100,78 @@ func Dial(addr, token string) (*Client, error) {
 	c := &Client{
 		addr:   addr,
 		token:  token,
-		queue:  make(chan *ingestv1.UsageDelta, queueCapacity),
+		queue:  make(chan *ingestv1.Event, queueCapacity),
 		cc:     cc,
 		cancel: cancel,
 	}
-	c.wg.Add(1)
+	c.dropWindowStart.Store(time.Now().Unix())
+	c.wg.Add(2)
 	go c.run(ctx)
+	go c.dropReportLoop(ctx)
 	return c, nil
 }
 
-// Send enqueues a delta. Non-blocking: drops if queue is full.
-func (c *Client) Send(d Delta) {
+// SendConnectionClosed enqueues a ConnectionClosed event. Non-blocking;
+// drops if queue is full.
+func (c *Client) SendConnectionClosed(cc ConnectionClosed) {
 	if c == nil {
 		return
 	}
-	msg := &ingestv1.UsageDelta{
-		Timestamp:              timestamppb.New(d.Timestamp),
-		Proxyset:               d.Proxyset,
-		SessionParams:          d.SessionParams,
-		SessionDurationMinutes: d.SessionDurationMinutes,
-		UploadBytes:            d.UploadBytes,
-		DownloadBytes:          d.DownloadBytes,
+	ev := &ingestv1.Event{
+		Ts:      timestamppb.New(coalesceTime(cc.Timestamp)),
+		EventId: newEventID(),
+		Payload: &ingestv1.Event_ConnectionClosed{
+			ConnectionClosed: &ingestv1.ConnectionClosed{
+				ConnectionId:           cc.ConnectionID,
+				Proxyset:               cc.Proxyset,
+				Provider:               cc.Provider,
+				SessionParamsHash:      cc.SessionParamsHash,
+				SessionDurationMinutes: cc.SessionDurationMinutes,
+				Epoch:                  cc.Epoch,
+				UpstreamIp:             cc.UpstreamIP,
+				Sni:                    cc.SNI,
+				CloseReason:            cc.CloseReason,
+				UploadBytes:            cc.UploadBytes,
+				DownloadBytes:          cc.DownloadBytes,
+				DurationMs:             cc.DurationMs,
+			},
+		},
 	}
+	c.enqueue(ev, cc.Proxyset)
+}
+
+// SendEpochTransition enqueues an EpochTransition event. Non-blocking;
+// drops if queue is full.
+func (c *Client) SendEpochTransition(t EpochTransition) {
+	if c == nil {
+		return
+	}
+	ev := &ingestv1.Event{
+		Ts:      timestamppb.New(coalesceTime(t.Timestamp)),
+		EventId: newEventID(),
+		Payload: &ingestv1.Event_EpochTransition{
+			EpochTransition: &ingestv1.EpochTransition{
+				SessionParamsHash: t.SessionParamsHash,
+				ParamsJson:        t.ParamsJSON,
+				Proxyset:          t.Proxyset,
+				Provider:          t.Provider,
+				PrevEpoch:         t.PrevEpoch,
+				NewEpoch:          t.NewEpoch,
+				PrevIp:            t.PrevIP,
+				NewIp:             t.NewIP,
+				StartReason:       t.StartReason,
+			},
+		},
+	}
+	c.enqueue(ev, t.Proxyset)
+}
+
+func (c *Client) enqueue(ev *ingestv1.Event, debugTag string) {
 	select {
-	case c.queue <- msg:
+	case c.queue <- ev:
 	default:
-		slog.Warn("analytics: send queue full, dropping delta", "proxyset", d.Proxyset)
+		c.droppedSinceReport.Add(1)
+		slog.Warn("analytics: send queue full, dropping event", "proxyset", debugTag)
 	}
 }
 
@@ -101,8 +185,6 @@ func (c *Client) Close() error {
 	return c.cc.Close()
 }
 
-// run is the background sender loop. It maintains one open stream and
-// reconnects with exponential backoff on failure.
 func (c *Client) run(ctx context.Context) {
 	defer c.wg.Done()
 	backoff := time.Second
@@ -134,7 +216,7 @@ func (c *Client) session(ctx context.Context) error {
 	if c.token != "" {
 		streamCtx = metadata.AppendToOutgoingContext(streamCtx, "authorization", "Bearer "+c.token)
 	}
-	stream, err := client.RecordUsage(streamCtx)
+	stream, err := client.RecordEvents(streamCtx)
 	if err != nil {
 		return err
 	}
@@ -150,4 +232,68 @@ func (c *Client) session(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+// dropReportLoop periodically flushes the drop counter as a DropReport event.
+// We do this through the same queue so it is naturally ordered with other
+// events, and so it inherits the same backpressure semantics (if the queue is
+// full the DropReport itself is dropped, which is fine — the next interval
+// covers it).
+func (c *Client) dropReportLoop(ctx context.Context) {
+	defer c.wg.Done()
+	t := time.NewTicker(dropReportInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			c.flushDropReport()
+			return
+		case <-t.C:
+			c.flushDropReport()
+		}
+	}
+}
+
+func (c *Client) flushDropReport() {
+	n := c.droppedSinceReport.Swap(0)
+	if n < dropReportMinDropped {
+		return
+	}
+	now := time.Now()
+	winStart := c.dropWindowStart.Swap(now.Unix())
+	ev := &ingestv1.Event{
+		Ts:      timestamppb.New(now),
+		EventId: newEventID(),
+		Payload: &ingestv1.Event_DropReport{
+			DropReport: &ingestv1.DropReport{
+				DroppedEvents: n,
+				WindowStart:   timestamppb.New(time.Unix(winStart, 0)),
+				WindowEnd:     timestamppb.New(now),
+			},
+		},
+	}
+	select {
+	case c.queue <- ev:
+	default:
+		// Drop the drop-report itself if the queue is full; restore the
+		// counter so the next interval captures it.
+		c.droppedSinceReport.Add(n)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// helpers
+// ---------------------------------------------------------------------------
+
+func newEventID() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
+}
+
+func coalesceTime(t time.Time) time.Time {
+	if t.IsZero() {
+		return time.Now().UTC()
+	}
+	return t
 }

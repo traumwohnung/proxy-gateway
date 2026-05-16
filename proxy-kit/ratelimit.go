@@ -266,7 +266,7 @@ func (h *rlConnTracker) RecordTraffic(upstream bool, delta int64, cancel func())
 	}
 }
 
-func (h *rlConnTracker) Close(_, _ int64) {
+func (h *rlConnTracker) Close(_, _ int64, _ string) {
 	if h.state.concurrent.Load() > 0 {
 		h.state.concurrent.Add(-1)
 	}
@@ -275,7 +275,7 @@ func (h *rlConnTracker) Close(_, _ int64) {
 type noopHandle struct{}
 
 func (noopHandle) RecordTraffic(_ bool, _ int64, _ func()) {}
-func (noopHandle) Close(_, _ int64)                        {}
+func (noopHandle) Close(_, _ int64, _ string)              {}
 
 // ---------------------------------------------------------------------------
 // Rolling counter

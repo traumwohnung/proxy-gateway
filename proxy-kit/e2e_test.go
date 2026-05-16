@@ -1263,7 +1263,7 @@ func TestE2E_Pipeline_AuthThenRateLimitThenSession(t *testing.T) {
 	if err != nil || r.Proxy == nil {
 		t.Fatalf("alice first resolve: %v", err)
 	}
-	r.ConnTracker.Close(0, 0)
+	r.ConnTracker.Close(0, 0, "test")
 
 	// Wrong password is rejected.
 	if _, err := resolve("alice", "wrong"); err == nil {
@@ -1275,12 +1275,12 @@ func TestE2E_Pipeline_AuthThenRateLimitThenSession(t *testing.T) {
 	if err != nil || rb.Proxy == nil {
 		t.Fatalf("bob resolve: %v", err)
 	}
-	rb.ConnTracker.Close(0, 0)
+	rb.ConnTracker.Close(0, 0, "test")
 
 	// Alice's second resolve hits the session cache — source not called again.
 	before := sourceCallCount.Load()
 	r2, _ := resolve("alice", "pw")
-	r2.ConnTracker.Close(0, 0)
+	r2.ConnTracker.Close(0, 0, "test")
 	if sourceCallCount.Load() != before {
 		t.Fatalf("session cache miss: source called (before=%d after=%d)", before, sourceCallCount.Load())
 	}

@@ -48,11 +48,14 @@ export function parseQuery(params: URLSearchParams): UsageQuery {
 
   if (Object.keys(where).length) q.where = where;
 
-  const groups = params.getAll('group');               // "proxyset" | "json:user"
+  const groups = params.getAll('group');               // "proxyset" | "provider" | "close_reason" | "json:<key>"
   if (groups.length) {
-    q.group_by = groups.map<Dimension>((g) =>
-      g === 'proxyset' ? { kind: 'proxyset' } : { kind: 'json', key: g.replace(/^json:/, '') },
-    );
+    q.group_by = groups.map<Dimension>((g) => {
+      if (g === 'proxyset')     return { kind: 'proxyset' };
+      if (g === 'provider')     return { kind: 'provider' };
+      if (g === 'close_reason') return { kind: 'close_reason' };
+      return { kind: 'json', key: g.replace(/^json:/, '') };
+    });
   }
 
   const sortBy  = params.get('sort_by');
@@ -87,7 +90,9 @@ export function serializeQuery(q: UsageQuery): URLSearchParams {
   if (w.session_duration_lte != null) p.set('session_duration_lte', String(w.session_duration_lte));
   for (const e of w.session_params_eq ?? [])      p.append('session_params_eq', `${e.key}:${e.value}`);
   for (const k of w.session_params_has_key ?? []) p.append('session_params_has_key', k);
-  for (const d of q.group_by ?? []) p.append('group', d.kind === 'proxyset' ? 'proxyset' : `json:${d.key}`);
+  for (const d of q.group_by ?? []) {
+    p.append('group', d.kind === 'json' ? `json:${d.key}` : d.kind);
+  }
   if (q.sort) {
     p.set('sort_by',  q.sort.by);
     p.set('sort_dir', q.sort.dir);

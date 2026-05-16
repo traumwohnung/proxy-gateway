@@ -5,72 +5,57 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
-	"proxy-gateway/analytics"
 	proxykit "proxy-kit"
 )
 
-// captureClient records every Send for assertions. It satisfies the same
-// surface UsageTracker uses (Send). UsageTracker keeps *analytics.Client, so
-// we feed a real Client whose conn is never dialled — instead we replace the
-// tracker's behavior by wrapping recorder methods. Simplest: use a custom
-// tracker variant via a small helper.
-
+// recorder collects connRecord/byte tuples for assertions.
 type recorder struct {
-	mu    sync.Mutex
-	sends []analytics.Delta
+	mu     sync.Mutex
+	closes []recordedClose
 }
 
-func (r *recorder) all() []analytics.Delta {
+type recordedClose struct {
+	rec      connRecord
+	upload   int64
+	download int64
+	reason   string
+}
+
+func (r *recorder) all() []recordedClose {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := make([]analytics.Delta, len(r.sends))
-	copy(out, r.sends)
+	out := make([]recordedClose, len(r.closes))
+	copy(out, r.closes)
 	return out
 }
 
-// trackerWithRecorder builds a UsageTracker whose record method goes through
-// the recorder rather than a real gRPC client.
-func trackerWithRecorder() (*UsageTracker, *recorder) {
-	r := &recorder{}
-	// We bypass analytics.Client by setting tracker.client = nil and using a
-	// shim that intercepts via Close → record. To exercise record(), we
-	// override the method via a small wrapper type below.
-	return &UsageTracker{client: nil}, r
-}
-
-// captureTracker is a UsageTracker-shaped type whose record() stores deltas
-// for inspection. It uses the same usageConnTracker structure.
+// captureTracker drops through to a recorder instead of a real analytics
+// client. Its record method mirrors UsageTracker.record minus the gRPC
+// dispatch.
 type captureTracker struct {
 	r *recorder
 }
 
-func (c *captureTracker) record(proxyset, sessionParams string, minutes int, upload, download int64) {
-	if upload == 0 && download == 0 {
+func (c *captureTracker) record(rec connRecord, upload, download int64, reason string) {
+	if upload == 0 && download == 0 && (reason == "" || reason == "ok") {
 		return
 	}
 	c.r.mu.Lock()
-	c.r.sends = append(c.r.sends, analytics.Delta{
-		Proxyset:               proxyset,
-		SessionParams:          sessionParams,
-		SessionDurationMinutes: int32(minutes),
-		UploadBytes:            upload,
-		DownloadBytes:          download,
-	})
+	c.r.closes = append(c.r.closes, recordedClose{rec: rec, upload: upload, download: download, reason: reason})
 	c.r.mu.Unlock()
 }
 
-// captureConnTracker mirrors usageConnTracker but writes to recorder.
+// captureConnTracker mirrors usageConnTracker but writes to the recorder.
 type captureConnTracker struct {
-	t             *captureTracker
-	proxyset      string
-	sessionParams string
-	minutes       int
+	t   *captureTracker
+	rec connRecord
 }
 
 func (c *captureConnTracker) RecordTraffic(_ bool, _ int64, _ func()) {}
-func (c *captureConnTracker) Close(sent, received int64) {
-	c.t.record(c.proxyset, c.sessionParams, c.minutes, sent, received)
+func (c *captureConnTracker) Close(sent, received int64, reason string) {
+	c.t.record(c.rec, sent, received, reason)
 }
 
 // ---------------------------------------------------------------------------
@@ -78,39 +63,58 @@ func (c *captureConnTracker) Close(sent, received int64) {
 // ---------------------------------------------------------------------------
 
 func TestUsageTracker_RecordSkipsZeroBytes(t *testing.T) {
-	tr, r := trackerWithRecorder()
+	r := &recorder{}
 	ct := &captureTracker{r: r}
 	// nil-client path of the real tracker should not panic.
-	tr.record("set", "{}", 5, 0, 0)
-	// And the capture variant skips zero-byte too.
-	ct.record("set", "{}", 5, 0, 0)
+	(&UsageTracker{client: nil}).record(connRecord{proxyset: "set"}, 0, 0, "ok")
+	// And the capture variant skips zero-byte "ok" too.
+	ct.record(connRecord{proxyset: "set"}, 0, 0, "ok")
 	if len(r.all()) != 0 {
 		t.Fatalf("zero-byte record should not emit, got %d", len(r.all()))
 	}
 }
 
-func TestUsageConnTracker_CloseEmitsOneDelta(t *testing.T) {
+func TestUsageConnTracker_CloseEmitsOneEvent(t *testing.T) {
 	r := &recorder{}
-	ct := &captureConnTracker{
-		t:             &captureTracker{r: r},
-		proxyset:      "datacenter",
-		sessionParams: `{"user":"alice"}`,
-		minutes:       60,
+	rec := connRecord{
+		connectionID:      "conn-1",
+		proxyset:          "datacenter",
+		sessionParamsHash: "deadbeef",
+		minutes:           60,
+		upstreamIP:        "1.2.3.4",
+		startedAt:         time.Now().Add(-100 * time.Millisecond).UTC(),
 	}
-	ct.Close(1024, 4096)
+	ct := &captureConnTracker{t: &captureTracker{r: r}, rec: rec}
+	ct.Close(1024, 4096, "ok")
+
 	got := r.all()
 	if len(got) != 1 {
-		t.Fatalf("want 1 delta, got %d", len(got))
+		t.Fatalf("want 1 close, got %d", len(got))
 	}
-	d := got[0]
-	if d.Proxyset != "datacenter" || d.SessionParams != `{"user":"alice"}` ||
-		d.SessionDurationMinutes != 60 || d.UploadBytes != 1024 || d.DownloadBytes != 4096 {
-		t.Errorf("delta mismatch: %+v", d)
+	c := got[0]
+	if c.rec.proxyset != "datacenter" || c.rec.sessionParamsHash != "deadbeef" ||
+		c.rec.minutes != 60 || c.upload != 1024 || c.download != 4096 ||
+		c.rec.upstreamIP != "1.2.3.4" || c.rec.connectionID != "conn-1" || c.reason != "ok" {
+		t.Errorf("record mismatch: %+v upload=%d download=%d reason=%q", c.rec, c.upload, c.download, c.reason)
+	}
+}
+
+func TestUsageConnTracker_CloseEmitsFailureReasonEvenAtZeroBytes(t *testing.T) {
+	r := &recorder{}
+	ct := &captureConnTracker{
+		t:   &captureTracker{r: r},
+		rec: connRecord{connectionID: "x", proxyset: "set", startedAt: time.Now().UTC()},
+	}
+	ct.Close(0, 0, "upstream_err")
+
+	got := r.all()
+	if len(got) != 1 || got[0].reason != "upstream_err" {
+		t.Fatalf("want one upstream_err event, got %+v", got)
 	}
 }
 
 func TestTrackUsageMiddleware_NilTrackerIsNoop(t *testing.T) {
-	pipeline := ParseJSONCreds(trackUsage(nil, testProxySource()))
+	pipeline := ParseJSONCreds(trackUsage(nil, nil, testProxySource()))
 	result, err := pipeline.Resolve(context.Background(), testProxyRequest("residential", ""))
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
@@ -120,9 +124,9 @@ func TestTrackUsageMiddleware_NilTrackerIsNoop(t *testing.T) {
 	}
 }
 
-func TestTrackUsageMiddleware_AttachesConnTracker(t *testing.T) {
+func TestTrackUsageMiddleware_AttachesConnTrackerWithHash(t *testing.T) {
 	tracker := &UsageTracker{client: nil}
-	pipeline := ParseJSONCreds(trackUsage(tracker, testProxySource()))
+	pipeline := ParseJSONCreds(trackUsage(tracker, nil, testProxySource()))
 	result, err := pipeline.Resolve(context.Background(), testProxyRequest("residential", `{"user":"alice"}`))
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
@@ -130,8 +134,28 @@ func TestTrackUsageMiddleware_AttachesConnTracker(t *testing.T) {
 	if result.ConnTracker == nil {
 		t.Fatal("expected ConnTracker to be set")
 	}
+	// Reach inside to verify the connRecord was populated correctly.
+	ct, ok := result.ConnTracker.(*usageConnTracker)
+	if !ok {
+		t.Fatalf("ConnTracker is not *usageConnTracker, got %T", result.ConnTracker)
+	}
+	if ct.rec.proxyset != "residential" {
+		t.Errorf("want proxyset=residential, got %q", ct.rec.proxyset)
+	}
+	if ct.rec.sessionParamsHash == "" {
+		t.Error("session_params_hash should be non-empty when affinity meta is set")
+	}
+	if ct.rec.connectionID == "" {
+		t.Error("connection_id should be non-empty")
+	}
+	if ct.rec.upstreamIP != "upstream" {
+		t.Errorf("want upstreamIP=upstream, got %q", ct.rec.upstreamIP)
+	}
+	if ct.rec.epoch != 0 {
+		t.Errorf("want epoch=0 in slice 1, got %d", ct.rec.epoch)
+	}
 	// Close on a tracker with nil client should not panic.
-	result.ConnTracker.Close(100, 200)
+	result.ConnTracker.Close(100, 200, "ok")
 }
 
 // ---------------------------------------------------------------------------
@@ -149,7 +173,7 @@ func testProxyRequest(set, meta string) *proxykit.Request {
 	if meta == "" {
 		username = fmt.Sprintf(`{"set":%q,"minutes":5}`, set)
 	} else {
-		username = fmt.Sprintf(`{"set":%q,"minutes":5,"meta":%s}`, set, meta)
+		username = fmt.Sprintf(`{"set":%q,"minutes":5,"affinity":%s}`, set, meta)
 	}
 	return &proxykit.Request{RawUsername: username}
 }

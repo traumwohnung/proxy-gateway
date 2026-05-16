@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"sort"
 
@@ -26,6 +28,15 @@ func (a *AffinityParams) Seed() uint64 {
 func (a *AffinityParams) CanonicalJSON() string {
 	meta := canonicalMeta(a.Meta)
 	return meta
+}
+
+// Hash returns the first 16 bytes of SHA-256(canonical_json) as lowercase hex.
+// This is the session_params_hash sent on analytics events and used as the
+// join key in session_params_dim / session_epoch. The hash is computed
+// locally on the hot path with no DB round-trip.
+func (a *AffinityParams) Hash() string {
+	sum := sha256.Sum256([]byte(a.CanonicalJSON()))
+	return hex.EncodeToString(sum[:16])
 }
 
 // ---------------------------------------------------------------------------

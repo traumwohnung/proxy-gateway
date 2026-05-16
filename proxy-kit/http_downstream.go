@@ -189,7 +189,7 @@ func (d *HTTPDownstream) serveConnect(w http.ResponseWriter, r *http.Request, ra
 		if err != nil {
 			slog.Error("upstream dial failed", "target", r.Host, "err", err)
 			if result.ConnTracker != nil {
-				result.ConnTracker.Close(0, 0)
+				result.ConnTracker.Close(0, 0, "upstream_err")
 			}
 			return
 		}
@@ -205,7 +205,7 @@ func (d *HTTPDownstream) serveConnect(w http.ResponseWriter, r *http.Request, ra
 		}
 		sent, received := relay(clientConn, upstreamConn, result.ConnTracker)
 		if result.ConnTracker != nil {
-			result.ConnTracker.Close(sent, received)
+			result.ConnTracker.Close(sent, received, "ok")
 		}
 		return
 	}
@@ -228,7 +228,7 @@ func (d *HTTPDownstream) serveConnect(w http.ResponseWriter, r *http.Request, ra
 	if err != nil {
 		slog.Error("upstream dial failed", "target", r.Host, "err", err)
 		if result.ConnTracker != nil {
-			result.ConnTracker.Close(0, 0)
+			result.ConnTracker.Close(0, 0, "upstream_err")
 		}
 		http.Error(w, "upstream unavailable", http.StatusBadGateway)
 		return
@@ -272,7 +272,7 @@ func (d *HTTPDownstream) serveConnect(w http.ResponseWriter, r *http.Request, ra
 
 	sent, received := relay(clientConn, upstreamConn, result.ConnTracker)
 	if result.ConnTracker != nil {
-		result.ConnTracker.Close(sent, received)
+		result.ConnTracker.Close(sent, received, "ok")
 	}
 }
 
@@ -325,7 +325,7 @@ func (d *HTTPDownstream) servePlainHTTP(w http.ResponseWriter, r *http.Request, 
 	if err != nil {
 		http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
 		if result.ConnTracker != nil {
-			result.ConnTracker.Close(0, 0)
+			result.ConnTracker.Close(0, 0, "upstream_err")
 		}
 		return
 	}
@@ -361,7 +361,7 @@ func (d *HTTPDownstream) servePlainHTTP(w http.ResponseWriter, r *http.Request, 
 	if result.ConnTracker != nil {
 		result.ConnTracker.RecordTraffic(true, sent, func() {})
 		result.ConnTracker.RecordTraffic(false, received, func() {})
-		result.ConnTracker.Close(sent, received)
+		result.ConnTracker.Close(sent, received, "ok")
 	}
 }
 

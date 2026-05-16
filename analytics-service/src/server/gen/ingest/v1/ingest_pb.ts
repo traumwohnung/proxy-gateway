@@ -12,18 +12,75 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file ingest/v1/ingest.proto.
  */
 export const file_ingest_v1_ingest: GenFile = /*@__PURE__*/
-  fileDesc("ChZpbmdlc3QvdjEvaW5nZXN0LnByb3RvEglpbmdlc3QudjEitQEKClVzYWdlRGVsdGESLQoJdGltZXN0YW1wGAEgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIQCghwcm94eXNldBgCIAEoCRIWCg5zZXNzaW9uX3BhcmFtcxgDIAEoCRIgChhzZXNzaW9uX2R1cmF0aW9uX21pbnV0ZXMYBCABKAUSFAoMdXBsb2FkX2J5dGVzGAUgASgDEhYKDmRvd25sb2FkX2J5dGVzGAYgASgDIhAKDlJlY29yZFVzYWdlQWNrMk0KBkluZ2VzdBJDCgtSZWNvcmRVc2FnZRIVLmluZ2VzdC52MS5Vc2FnZURlbHRhGhkuaW5nZXN0LnYxLlJlY29yZFVzYWdlQWNrIgAoAUIwWi5wcm94eS1nYXRld2F5L2FuYWx5dGljcy9nZW4vaW5nZXN0L3YxO2luZ2VzdHYxYgZwcm90bzM", [file_google_protobuf_timestamp]);
+  fileDesc("ChZpbmdlc3QvdjEvaW5nZXN0LnByb3RvEglpbmdlc3QudjEinAIKBUV2ZW50EiYKAnRzGAEgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIQCghldmVudF9pZBgCIAEoCRI4ChFjb25uZWN0aW9uX2Nsb3NlZBgKIAEoCzIbLmluZ2VzdC52MS5Db25uZWN0aW9uQ2xvc2VkSAASNgoQZXBvY2hfdHJhbnNpdGlvbhgLIAEoCzIaLmluZ2VzdC52MS5FcG9jaFRyYW5zaXRpb25IABIsCgtkcm9wX3JlcG9ydBgMIAEoCzIVLmluZ2VzdC52MS5Ecm9wUmVwb3J0SAASLgoMbWl0bV9yZXF1ZXN0GA0gASgLMhYuaW5nZXN0LnYxLk1pdG1SZXF1ZXN0SABCCQoHcGF5bG9hZCKWAgoQQ29ubmVjdGlvbkNsb3NlZBIVCg1jb25uZWN0aW9uX2lkGAEgASgJEhAKCHByb3h5c2V0GAIgASgJEhAKCHByb3ZpZGVyGAMgASgJEhsKE3Nlc3Npb25fcGFyYW1zX2hhc2gYBCABKAkSIAoYc2Vzc2lvbl9kdXJhdGlvbl9taW51dGVzGAUgASgFEg0KBWVwb2NoGAYgASgFEhMKC3Vwc3RyZWFtX2lwGAcgASgJEgsKA3NuaRgIIAEoCRIUCgxjbG9zZV9yZWFzb24YCSABKAkSFAoMdXBsb2FkX2J5dGVzGAogASgDEhYKDmRvd25sb2FkX2J5dGVzGAsgASgDEhMKC2R1cmF0aW9uX21zGAwgASgDIsUBCg9FcG9jaFRyYW5zaXRpb24SGwoTc2Vzc2lvbl9wYXJhbXNfaGFzaBgBIAEoCRITCgtwYXJhbXNfanNvbhgCIAEoCRIQCghwcm94eXNldBgDIAEoCRIQCghwcm92aWRlchgEIAEoCRISCgpwcmV2X2Vwb2NoGAUgASgFEhEKCW5ld19lcG9jaBgGIAEoBRIPCgdwcmV2X2lwGAcgASgJEg4KBm5ld19pcBgIIAEoCRIUCgxzdGFydF9yZWFzb24YCSABKAkihgEKCkRyb3BSZXBvcnQSFgoOZHJvcHBlZF9ldmVudHMYASABKAMSMAoMd2luZG93X3N0YXJ0GAIgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgp3aW5kb3dfZW5kGAMgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCINCgtNaXRtUmVxdWVzdCIdCglSZWNvcmRBY2sSEAoIYWNjZXB0ZWQYASABKAQyRAoGSW5nZXN0EjoKDFJlY29yZEV2ZW50cxIQLmluZ2VzdC52MS5FdmVudBoULmluZ2VzdC52MS5SZWNvcmRBY2siACgBQjBaLnByb3h5LWdhdGV3YXkvYW5hbHl0aWNzL2dlbi9pbmdlc3QvdjE7aW5nZXN0djFiBnByb3RvMw", [file_google_protobuf_timestamp]);
 
 /**
- * @generated from message ingest.v1.UsageDelta
+ * @generated from message ingest.v1.Event
  */
-export type UsageDelta = Message<"ingest.v1.UsageDelta"> & {
+export type Event = Message<"ingest.v1.Event"> & {
   /**
-   * Wall-clock timestamp when the connection closed.
+   * Wall-clock timestamp when the event was produced on the gateway.
    *
-   * @generated from field: google.protobuf.Timestamp timestamp = 1;
+   * @generated from field: google.protobuf.Timestamp ts = 1;
    */
-  timestamp?: Timestamp | undefined;
+  ts?: Timestamp | undefined;
+
+  /**
+   * Gateway-generated ULID, used as the idempotency key in raw_events.
+   *
+   * @generated from field: string event_id = 2;
+   */
+  eventId: string;
+
+  /**
+   * @generated from oneof ingest.v1.Event.payload
+   */
+  payload: {
+    /**
+     * @generated from field: ingest.v1.ConnectionClosed connection_closed = 10;
+     */
+    value: ConnectionClosed;
+    case: "connectionClosed";
+  } | {
+    /**
+     * @generated from field: ingest.v1.EpochTransition epoch_transition = 11;
+     */
+    value: EpochTransition;
+    case: "epochTransition";
+  } | {
+    /**
+     * @generated from field: ingest.v1.DropReport drop_report = 12;
+     */
+    value: DropReport;
+    case: "dropReport";
+  } | {
+    /**
+     * reserved, not emitted yet
+     *
+     * @generated from field: ingest.v1.MitmRequest mitm_request = 13;
+     */
+    value: MitmRequest;
+    case: "mitmRequest";
+  } | { case: undefined; value?: undefined };
+};
+
+/**
+ * Describes the message ingest.v1.Event.
+ * Use `create(EventSchema)` to create a new message.
+ */
+export const EventSchema: GenMessage<Event> = /*@__PURE__*/
+  messageDesc(file_ingest_v1_ingest, 0);
+
+/**
+ * ConnectionClosed is emitted once per outbound connection that finished.
+ *
+ * @generated from message ingest.v1.ConnectionClosed
+ */
+export type ConnectionClosed = Message<"ingest.v1.ConnectionClosed"> & {
+  /**
+   * @generated from field: string connection_id = 1;
+   */
+  connectionId: string;
 
   /**
    * @generated from field: string proxyset = 2;
@@ -31,65 +88,227 @@ export type UsageDelta = Message<"ingest.v1.UsageDelta"> & {
   proxyset: string;
 
   /**
-   * Canonical JSON encoding of the session parameters (formerly affinity).
-   *
-   * @generated from field: string session_params = 3;
+   * @generated from field: string provider = 3;
    */
-  sessionParams: string;
+  provider: string;
 
   /**
-   * Configured session duration in minutes (0 = no affinity, 1..1440 = sticky).
+   * First 16 bytes of SHA-256 over the canonical JSON of the session params,
+   * lowercase hex (32 chars). Canonical form: keys sorted, no whitespace,
+   * numbers in their natural JSON form. The gateway computes this locally.
    *
-   * @generated from field: int32 session_duration_minutes = 4;
+   * @generated from field: string session_params_hash = 4;
+   */
+  sessionParamsHash: string;
+
+  /**
+   * @generated from field: int32 session_duration_minutes = 5;
    */
   sessionDurationMinutes: number;
 
   /**
-   * @generated from field: int64 upload_bytes = 5;
+   * Which IP-binding generation this connection belongs to. 0 = initial.
+   *
+   * @generated from field: int32 epoch = 6;
+   */
+  epoch: number;
+
+  /**
+   * @generated from field: string upstream_ip = 7;
+   */
+  upstreamIp: string;
+
+  /**
+   * @generated from field: string sni = 8;
+   */
+  sni: string;
+
+  /**
+   * ok|client_close|upstream_err|timeout|auth_fail
+   *
+   * @generated from field: string close_reason = 9;
+   */
+  closeReason: string;
+
+  /**
+   * @generated from field: int64 upload_bytes = 10;
    */
   uploadBytes: bigint;
 
   /**
-   * @generated from field: int64 download_bytes = 6;
+   * @generated from field: int64 download_bytes = 11;
    */
   downloadBytes: bigint;
+
+  /**
+   * @generated from field: int64 duration_ms = 12;
+   */
+  durationMs: bigint;
 };
 
 /**
- * Describes the message ingest.v1.UsageDelta.
- * Use `create(UsageDeltaSchema)` to create a new message.
+ * Describes the message ingest.v1.ConnectionClosed.
+ * Use `create(ConnectionClosedSchema)` to create a new message.
  */
-export const UsageDeltaSchema: GenMessage<UsageDelta> = /*@__PURE__*/
-  messageDesc(file_ingest_v1_ingest, 0);
-
-/**
- * @generated from message ingest.v1.RecordUsageAck
- */
-export type RecordUsageAck = Message<"ingest.v1.RecordUsageAck"> & {
-};
-
-/**
- * Describes the message ingest.v1.RecordUsageAck.
- * Use `create(RecordUsageAckSchema)` to create a new message.
- */
-export const RecordUsageAckSchema: GenMessage<RecordUsageAck> = /*@__PURE__*/
+export const ConnectionClosedSchema: GenMessage<ConnectionClosed> = /*@__PURE__*/
   messageDesc(file_ingest_v1_ingest, 1);
 
 /**
- * Ingest is the write-only API the proxy-gateway uses to push usage data.
+ * EpochTransition is emitted whenever the IP bound to a logical session
+ * changes. The very first binding is also a transition (start_reason =
+ * "first_bind", prev_epoch = -1).
+ *
+ * @generated from message ingest.v1.EpochTransition
+ */
+export type EpochTransition = Message<"ingest.v1.EpochTransition"> & {
+  /**
+   * @generated from field: string session_params_hash = 1;
+   */
+  sessionParamsHash: string;
+
+  /**
+   * Canonical JSON of the session params. Populated on first_bind so the
+   * ingest server can backfill session_params_dim.params_json. May be empty
+   * on subsequent transitions.
+   *
+   * @generated from field: string params_json = 2;
+   */
+  paramsJson: string;
+
+  /**
+   * @generated from field: string proxyset = 3;
+   */
+  proxyset: string;
+
+  /**
+   * @generated from field: string provider = 4;
+   */
+  provider: string;
+
+  /**
+   * -1 on first_bind
+   *
+   * @generated from field: int32 prev_epoch = 5;
+   */
+  prevEpoch: number;
+
+  /**
+   * @generated from field: int32 new_epoch = 6;
+   */
+  newEpoch: number;
+
+  /**
+   * empty on first_bind
+   *
+   * @generated from field: string prev_ip = 7;
+   */
+  prevIp: string;
+
+  /**
+   * @generated from field: string new_ip = 8;
+   */
+  newIp: string;
+
+  /**
+   * first_bind|ttl|forced|burned|upstream_5xx|client_signal|pool_reshuffle
+   *
+   * @generated from field: string start_reason = 9;
+   */
+  startReason: string;
+};
+
+/**
+ * Describes the message ingest.v1.EpochTransition.
+ * Use `create(EpochTransitionSchema)` to create a new message.
+ */
+export const EpochTransitionSchema: GenMessage<EpochTransition> = /*@__PURE__*/
+  messageDesc(file_ingest_v1_ingest, 2);
+
+/**
+ * DropReport surfaces silent loss caused by the gateway's bounded send queue
+ * filling up. Emitted periodically so dashboards can show known data loss.
+ *
+ * @generated from message ingest.v1.DropReport
+ */
+export type DropReport = Message<"ingest.v1.DropReport"> & {
+  /**
+   * @generated from field: int64 dropped_events = 1;
+   */
+  droppedEvents: bigint;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp window_start = 2;
+   */
+  windowStart?: Timestamp | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp window_end = 3;
+   */
+  windowEnd?: Timestamp | undefined;
+};
+
+/**
+ * Describes the message ingest.v1.DropReport.
+ * Use `create(DropReportSchema)` to create a new message.
+ */
+export const DropReportSchema: GenMessage<DropReport> = /*@__PURE__*/
+  messageDesc(file_ingest_v1_ingest, 3);
+
+/**
+ * MitmRequest is reserved for the MITM feature. The variant exists so adding
+ * emission later is non-breaking; the field set will be designed when MITM
+ * goes to production.
+ *
+ * Placeholder. No fields populated yet.
+ *
+ * @generated from message ingest.v1.MitmRequest
+ */
+export type MitmRequest = Message<"ingest.v1.MitmRequest"> & {
+};
+
+/**
+ * Describes the message ingest.v1.MitmRequest.
+ * Use `create(MitmRequestSchema)` to create a new message.
+ */
+export const MitmRequestSchema: GenMessage<MitmRequest> = /*@__PURE__*/
+  messageDesc(file_ingest_v1_ingest, 4);
+
+/**
+ * @generated from message ingest.v1.RecordAck
+ */
+export type RecordAck = Message<"ingest.v1.RecordAck"> & {
+  /**
+   * @generated from field: uint64 accepted = 1;
+   */
+  accepted: bigint;
+};
+
+/**
+ * Describes the message ingest.v1.RecordAck.
+ * Use `create(RecordAckSchema)` to create a new message.
+ */
+export const RecordAckSchema: GenMessage<RecordAck> = /*@__PURE__*/
+  messageDesc(file_ingest_v1_ingest, 5);
+
+/**
+ * Ingest is the write-only API the proxy-gateway uses to push observability
+ * events. Events are streamed and the server is fire-and-forget from the
+ * gateway's perspective.
  *
  * @generated from service ingest.v1.Ingest
  */
 export const Ingest: GenService<{
   /**
-   * RecordUsage streams one UsageDelta per closed connection.
+   * RecordEvents streams Event messages. Each Event carries one variant in
+   * its `payload` oneof. event_id is the idempotency key; the server uses
+   * INSERT OR IGNORE on it.
    *
-   * @generated from rpc ingest.v1.Ingest.RecordUsage
+   * @generated from rpc ingest.v1.Ingest.RecordEvents
    */
-  recordUsage: {
+  recordEvents: {
     methodKind: "client_streaming";
-    input: typeof UsageDeltaSchema;
-    output: typeof RecordUsageAckSchema;
+    input: typeof EventSchema;
+    output: typeof RecordAckSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_ingest_v1_ingest, 0);

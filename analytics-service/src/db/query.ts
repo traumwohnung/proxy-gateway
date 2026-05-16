@@ -1,6 +1,8 @@
-import { sqlite } from './client.js';
+import { sql } from './client.js';
 import {
   dimName,
+  dimRequiresDim,
+  whereRequiresDim,
   type UsageQuery as UsageQuery_,
   type Dimension,
   type Metric,
@@ -10,10 +12,20 @@ type UsageQuery = UsageQuery_;
 type Where = Where_;
 
 export { UsageQuery, validate } from './query-schema.js';
-export type { UsageQuery, Dimension, Metric, Where, QueryError } from './query-schema.js';
+export type { Dimension, Metric, Where, QueryError } from './query-schema.js';
 
 // ---------------------------------------------------------------------------
-// SQL rendering
+// SQL rendering for the analytics dashboard.
+//
+// All values that reach SQL come from zod-validated input. Strings are
+// inline-quoted (single-quote doubled); numbers are inlined as-is; JSON keys
+// and identifier names are constrained by regex upstream so direct
+// interpolation is injection-safe. We pass the assembled string through
+// waddler's sql.raw — no separate parameter binding needed.
+//
+// Queries target `connection_closed AS cc`. When a JSON dimension or filter
+// is present, we LEFT JOIN `session_params_dim AS dim` and read keys via
+// DuckDB's json_extract_string.
 // ---------------------------------------------------------------------------
 
 const UNIT_SECONDS: Record<'minute'|'hour'|'day', number> = {
@@ -22,90 +34,109 @@ const UNIT_SECONDS: Record<'minute'|'hour'|'day', number> = {
   day:    86400,
 };
 
-function dimSQL(d: Dimension): string {
-  return d.kind === 'proxyset'
-    ? 'proxyset'
-    : `json_extract(session_params, '$.${d.key}')`;
+function quoteStr(s: string): string {
+  return `'${s.replace(/'/g, "''")}'`;
 }
 
-function metricSQL(m: Metric): string {
-  switch (m) {
-    case 'connections':    return 'COUNT(*)';
-    case 'upload_bytes':   return 'SUM(upload_bytes)';
-    case 'download_bytes': return 'SUM(download_bytes)';
-    case 'total_bytes':    return 'SUM(upload_bytes + download_bytes)';
+function quoteList(values: readonly (string | number)[]): string {
+  return values.map((v) => (typeof v === 'number' ? String(v) : quoteStr(v))).join(', ');
+}
+
+function quoteScalar(v: string | number): string {
+  return typeof v === 'number' ? String(v) : quoteStr(v);
+}
+
+function dimExpr(d: Dimension): string {
+  switch (d.kind) {
+    case 'proxyset':     return 'cc.proxyset';
+    case 'provider':     return 'cc.provider';
+    case 'close_reason': return 'cc.close_reason';
+    case 'json':         return `json_extract_string(dim.params_json, '$.${d.key}')`;
   }
 }
 
-type BoundArg = string | number;
-
-interface Rendered {
-  sql: string;
-  args: BoundArg[];
+function metricExpr(m: Metric): string {
+  switch (m) {
+    case 'connections':    return 'COUNT(*)';
+    case 'upload_bytes':   return 'SUM(CAST(cc.upload_bytes AS DOUBLE))';
+    case 'download_bytes': return 'SUM(CAST(cc.download_bytes AS DOUBLE))';
+    case 'total_bytes':    return 'SUM(CAST(cc.upload_bytes AS DOUBLE) + CAST(cc.download_bytes AS DOUBLE))';
+  }
 }
 
-function renderWhere(time: UsageQuery['time'], where?: Where): { clauses: string[]; args: BoundArg[] } {
-  const clauses: string[] = ['ts >= ?', 'ts <= ?'];
-  const args: BoundArg[] = [time.from, time.to];
-  if (!where) return { clauses, args };
-
-  const push = (sql: string, ...a: BoundArg[]) => { clauses.push(sql); args.push(...a); };
-
-  if (where.proxyset_eq     != null) push('proxyset = ?',  where.proxyset_eq);
-  if (where.proxyset_ne     != null) push('proxyset != ?', where.proxyset_ne);
-  if (where.proxyset_in     != null) push(`proxyset IN (${where.proxyset_in.map(()=>'?').join(',')})`,        ...where.proxyset_in);
-  if (where.proxyset_not_in != null) push(`proxyset NOT IN (${where.proxyset_not_in.map(()=>'?').join(',')})`, ...where.proxyset_not_in);
-
-  if (where.session_duration_eq      != null) push('session_duration_minutes = ?',  where.session_duration_eq);
-  if (where.session_duration_ne      != null) push('session_duration_minutes != ?', where.session_duration_ne);
-  if (where.session_duration_gt      != null) push('session_duration_minutes > ?',  where.session_duration_gt);
-  if (where.session_duration_gte     != null) push('session_duration_minutes >= ?', where.session_duration_gte);
-  if (where.session_duration_lt      != null) push('session_duration_minutes < ?',  where.session_duration_lt);
-  if (where.session_duration_lte     != null) push('session_duration_minutes <= ?', where.session_duration_lte);
-  if (where.session_duration_between != null) push('session_duration_minutes BETWEEN ? AND ?', where.session_duration_between[0], where.session_duration_between[1]);
-
-  for (const p of where.session_params_eq ?? []) push(`json_extract(session_params, '$.${p.key}') = ?`, p.value);
-  for (const p of where.session_params_ne ?? []) push(`json_extract(session_params, '$.${p.key}') != ?`, p.value);
-  for (const p of where.session_params_in ?? []) push(
-    `json_extract(session_params, '$.${p.key}') IN (${p.values.map(()=>'?').join(',')})`, ...p.values);
-  for (const p of where.session_params_not_in ?? []) push(
-    `json_extract(session_params, '$.${p.key}') NOT IN (${p.values.map(()=>'?').join(',')})`, ...p.values);
-  for (const k of where.session_params_has_key ?? []) push(`json_extract(session_params, '$.${k}') IS NOT NULL`);
-
-  return { clauses, args };
+function jsonKeyExpr(key: string): string {
+  return `json_extract_string(dim.params_json, '$.${key}')`;
 }
 
-export function renderSQL(q: UsageQuery): Rendered {
-  const { clauses, args } = renderWhere(q.time, q.where);
+function renderWhere(time: UsageQuery['time'], where: Where | undefined, needsDim: boolean): string[] {
+  const clauses: string[] = [`cc.ts >= ${time.from}`, `cc.ts <= ${time.to}`];
+  if (!where) return clauses;
+
+  if (where.proxyset_eq     != null) clauses.push(`cc.proxyset = ${quoteStr(where.proxyset_eq)}`);
+  if (where.proxyset_ne     != null) clauses.push(`cc.proxyset != ${quoteStr(where.proxyset_ne)}`);
+  if (where.proxyset_in     != null) clauses.push(`cc.proxyset IN (${quoteList(where.proxyset_in)})`);
+  if (where.proxyset_not_in != null) clauses.push(`cc.proxyset NOT IN (${quoteList(where.proxyset_not_in)})`);
+
+  if (where.provider_eq     != null) clauses.push(`cc.provider = ${quoteStr(where.provider_eq)}`);
+  if (where.provider_ne     != null) clauses.push(`cc.provider != ${quoteStr(where.provider_ne)}`);
+  if (where.provider_in     != null) clauses.push(`cc.provider IN (${quoteList(where.provider_in)})`);
+  if (where.provider_not_in != null) clauses.push(`cc.provider NOT IN (${quoteList(where.provider_not_in)})`);
+
+  if (where.close_reason_eq != null) clauses.push(`cc.close_reason = ${quoteStr(where.close_reason_eq)}`);
+  if (where.close_reason_in != null) clauses.push(`cc.close_reason IN (${quoteList(where.close_reason_in)})`);
+
+  if (where.session_duration_eq      != null) clauses.push(`cc.session_duration_minutes = ${where.session_duration_eq}`);
+  if (where.session_duration_ne      != null) clauses.push(`cc.session_duration_minutes != ${where.session_duration_ne}`);
+  if (where.session_duration_gt      != null) clauses.push(`cc.session_duration_minutes > ${where.session_duration_gt}`);
+  if (where.session_duration_gte     != null) clauses.push(`cc.session_duration_minutes >= ${where.session_duration_gte}`);
+  if (where.session_duration_lt      != null) clauses.push(`cc.session_duration_minutes < ${where.session_duration_lt}`);
+  if (where.session_duration_lte     != null) clauses.push(`cc.session_duration_minutes <= ${where.session_duration_lte}`);
+  if (where.session_duration_between != null) clauses.push(`cc.session_duration_minutes BETWEEN ${where.session_duration_between[0]} AND ${where.session_duration_between[1]}`);
+
+  if (needsDim) {
+    for (const p of where.session_params_eq ?? []) clauses.push(`${jsonKeyExpr(p.key)} = ${quoteScalar(p.value)}`);
+    for (const p of where.session_params_ne ?? []) clauses.push(`${jsonKeyExpr(p.key)} != ${quoteScalar(p.value)}`);
+    for (const p of where.session_params_in ?? []) clauses.push(`${jsonKeyExpr(p.key)} IN (${quoteList(p.values)})`);
+    for (const p of where.session_params_not_in ?? []) clauses.push(`${jsonKeyExpr(p.key)} NOT IN (${quoteList(p.values)})`);
+    for (const k of where.session_params_has_key ?? []) clauses.push(`${jsonKeyExpr(k)} IS NOT NULL`);
+  }
+
+  return clauses;
+}
+
+export function renderSQL(q: UsageQuery): string {
+  const needsDim = (q.group_by ?? []).some(dimRequiresDim) || whereRequiresDim(q.where);
+  const clauses = renderWhere(q.time, q.where, needsDim);
 
   const selectCols: string[] = [];
   const groupCols: string[] = [];
 
-  const hasResolution = q.time.resolution != null;
-  if (hasResolution) {
-    const r = q.time.resolution!;
+  if (q.time.resolution != null) {
+    const r = q.time.resolution;
     const w = UNIT_SECONDS[r.unit] * r.value;
-    selectCols.push(`(ts / ?) * ? AS bucket`);
+    selectCols.push(`(cc.ts / ${w}) * ${w} AS bucket`);
     groupCols.push('bucket');
-    args.unshift(w, w);
   }
 
   for (const d of q.group_by ?? []) {
-    selectCols.push(`${dimSQL(d)} AS ${dimName(d)}`);
-    groupCols.push(dimName(d));
+    const alias = `"${dimName(d)}"`;
+    selectCols.push(`${dimExpr(d)} AS ${alias}`);
+    groupCols.push(alias);
   }
 
-  selectCols.push(`${metricSQL(q.metric)} AS value`);
+  selectCols.push(`${metricExpr(q.metric)} AS value`);
 
-  const sql =
-    `SELECT ${selectCols.join(', ')} FROM usage ` +
-    `WHERE ${clauses.join(' AND ')}` +
-    (groupCols.length ? ` GROUP BY ${groupCols.join(', ')}` : '');
+  const join = needsDim
+    ? 'LEFT JOIN session_params_dim AS dim ON dim.hash = cc.session_params_hash'
+    : '';
 
-  return { sql, args };
+  const groupBy = groupCols.length ? `GROUP BY ${groupCols.join(', ')}` : '';
+
+  return (
+    `SELECT ${selectCols.join(', ')} FROM connection_closed AS cc ${join} ` +
+    `WHERE ${clauses.join(' AND ')} ${groupBy}`
+  );
 }
-
-// (validate + QueryError live in query-schema.ts — re-exported at top.)
 
 // ---------------------------------------------------------------------------
 // Execute
@@ -124,27 +155,43 @@ export interface UsageQueryResult {
   meta:   { series_count: number; buckets: number };
 }
 
+type RawRow = Record<string, unknown>;
+
+function rowVal(v: unknown, fallback: number): number {
+  if (typeof v === 'bigint') return Number(v);
+  if (typeof v === 'number') return v;
+  if (v == null) return fallback;
+  return Number(v);
+}
+
 export async function runUsageQuery(q: UsageQuery): Promise<UsageQueryResult> {
-  const { sql, args } = renderSQL(q);
-  const res = await sqlite.execute({ sql, args: args as never });
+  const text = renderSQL(q);
+  const rows = (await sql`${sql.raw(text)}`) as RawRow[];
 
   const hasResolution = q.time.resolution != null;
   const dims = q.group_by ?? [];
   const dimNames = dims.map(dimName);
 
-  // Pivot rows into series keyed by stringified group.
   const seriesMap = new Map<string, Series>();
-  let bucketSet = new Set<number>();
+  const bucketSet = new Set<number>();
 
-  for (const row of res.rows) {
-    const value = Number(row.value ?? 0);
-    const ts = hasResolution ? Number(row.bucket) : q.time.from;
+  for (const row of rows) {
+    const value = rowVal(row.value, 0);
+    const ts = hasResolution ? rowVal(row.bucket, q.time.from) : q.time.from;
     bucketSet.add(ts);
 
     const group: Record<string, string | number | null> = {};
     for (const n of dimNames) {
       const v = row[n];
-      group[n] = v == null ? null : (typeof v === 'number' ? v : String(v));
+      if (v == null) {
+        group[n] = null;
+      } else if (typeof v === 'bigint') {
+        group[n] = Number(v);
+      } else if (typeof v === 'number') {
+        group[n] = v;
+      } else {
+        group[n] = String(v);
+      }
     }
     const key = JSON.stringify(group);
 
@@ -157,10 +204,8 @@ export async function runUsageQuery(q: UsageQuery): Promise<UsageQueryResult> {
     s.total += value;
   }
 
-  // Sort points within each series chronologically.
   for (const s of seriesMap.values()) s.points.sort((a, b) => a[0] - b[0]);
 
-  // Sort series.
   const sortBy  = q.sort?.by  ?? 'metric';
   const sortDir = q.sort?.dir ?? 'desc';
   const cmpNum = (a: number, b: number) => sortDir === 'asc' ? a - b : b - a;
@@ -181,11 +226,9 @@ export async function runUsageQuery(q: UsageQuery): Promise<UsageQueryResult> {
     });
   }
 
-  // Compute global total BEFORE limiting (so total reflects everything matched).
   let total = 0;
   for (const s of series) total += s.total;
 
-  // Apply limit.
   const limit = q.limit ?? 100;
   if (series.length > limit) series = series.slice(0, limit);
 

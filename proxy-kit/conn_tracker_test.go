@@ -19,7 +19,7 @@ func TestChainTrackers(t *testing.T) {
 	a := &testTracker{onClose: func() { called++ }}
 	b := &testTracker{onClose: func() { called += 10 }}
 	c := ChainTrackers(a, b)
-	c.Close(0, 0)
+	c.Close(0, 0, "test")
 	if called != 11 {
 		t.Fatalf("expected 11, got %d", called)
 	}
@@ -30,4 +30,4 @@ type testTracker struct {
 }
 
 func (h *testTracker) RecordTraffic(_ bool, _ int64, _ func()) {}
-func (h *testTracker) Close(_, _ int64)                        { h.onClose() }
+func (h *testTracker) Close(_, _ int64, _ string)              { h.onClose() }

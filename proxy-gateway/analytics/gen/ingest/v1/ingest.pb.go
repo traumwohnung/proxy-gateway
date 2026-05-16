@@ -22,35 +22,37 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-type UsageDelta struct {
+type Event struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Wall-clock timestamp when the connection closed.
-	Timestamp *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
-	Proxyset  string                 `protobuf:"bytes,2,opt,name=proxyset,proto3" json:"proxyset,omitempty"`
-	// Canonical JSON encoding of the session parameters (formerly affinity).
-	SessionParams string `protobuf:"bytes,3,opt,name=session_params,json=sessionParams,proto3" json:"session_params,omitempty"`
-	// Configured session duration in minutes (0 = no affinity, 1..1440 = sticky).
-	SessionDurationMinutes int32 `protobuf:"varint,4,opt,name=session_duration_minutes,json=sessionDurationMinutes,proto3" json:"session_duration_minutes,omitempty"`
-	UploadBytes            int64 `protobuf:"varint,5,opt,name=upload_bytes,json=uploadBytes,proto3" json:"upload_bytes,omitempty"`
-	DownloadBytes          int64 `protobuf:"varint,6,opt,name=download_bytes,json=downloadBytes,proto3" json:"download_bytes,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// Wall-clock timestamp when the event was produced on the gateway.
+	Ts *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=ts,proto3" json:"ts,omitempty"`
+	// Gateway-generated ULID, used as the idempotency key in raw_events.
+	EventId string `protobuf:"bytes,2,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
+	// Types that are valid to be assigned to Payload:
+	//
+	//	*Event_ConnectionClosed
+	//	*Event_EpochTransition
+	//	*Event_DropReport
+	//	*Event_MitmRequest
+	Payload       isEvent_Payload `protobuf_oneof:"payload"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
-func (x *UsageDelta) Reset() {
-	*x = UsageDelta{}
+func (x *Event) Reset() {
+	*x = Event{}
 	mi := &file_ingest_v1_ingest_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *UsageDelta) String() string {
+func (x *Event) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*UsageDelta) ProtoMessage() {}
+func (*Event) ProtoMessage() {}
 
-func (x *UsageDelta) ProtoReflect() protoreflect.Message {
+func (x *Event) ProtoReflect() protoreflect.Message {
 	mi := &file_ingest_v1_ingest_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -62,74 +64,271 @@ func (x *UsageDelta) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use UsageDelta.ProtoReflect.Descriptor instead.
-func (*UsageDelta) Descriptor() ([]byte, []int) {
+// Deprecated: Use Event.ProtoReflect.Descriptor instead.
+func (*Event) Descriptor() ([]byte, []int) {
 	return file_ingest_v1_ingest_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *UsageDelta) GetTimestamp() *timestamppb.Timestamp {
+func (x *Event) GetTs() *timestamppb.Timestamp {
 	if x != nil {
-		return x.Timestamp
+		return x.Ts
 	}
 	return nil
 }
 
-func (x *UsageDelta) GetProxyset() string {
+func (x *Event) GetEventId() string {
+	if x != nil {
+		return x.EventId
+	}
+	return ""
+}
+
+func (x *Event) GetPayload() isEvent_Payload {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+func (x *Event) GetConnectionClosed() *ConnectionClosed {
+	if x != nil {
+		if x, ok := x.Payload.(*Event_ConnectionClosed); ok {
+			return x.ConnectionClosed
+		}
+	}
+	return nil
+}
+
+func (x *Event) GetEpochTransition() *EpochTransition {
+	if x != nil {
+		if x, ok := x.Payload.(*Event_EpochTransition); ok {
+			return x.EpochTransition
+		}
+	}
+	return nil
+}
+
+func (x *Event) GetDropReport() *DropReport {
+	if x != nil {
+		if x, ok := x.Payload.(*Event_DropReport); ok {
+			return x.DropReport
+		}
+	}
+	return nil
+}
+
+func (x *Event) GetMitmRequest() *MitmRequest {
+	if x != nil {
+		if x, ok := x.Payload.(*Event_MitmRequest); ok {
+			return x.MitmRequest
+		}
+	}
+	return nil
+}
+
+type isEvent_Payload interface {
+	isEvent_Payload()
+}
+
+type Event_ConnectionClosed struct {
+	ConnectionClosed *ConnectionClosed `protobuf:"bytes,10,opt,name=connection_closed,json=connectionClosed,proto3,oneof"`
+}
+
+type Event_EpochTransition struct {
+	EpochTransition *EpochTransition `protobuf:"bytes,11,opt,name=epoch_transition,json=epochTransition,proto3,oneof"`
+}
+
+type Event_DropReport struct {
+	DropReport *DropReport `protobuf:"bytes,12,opt,name=drop_report,json=dropReport,proto3,oneof"`
+}
+
+type Event_MitmRequest struct {
+	MitmRequest *MitmRequest `protobuf:"bytes,13,opt,name=mitm_request,json=mitmRequest,proto3,oneof"` // reserved, not emitted yet
+}
+
+func (*Event_ConnectionClosed) isEvent_Payload() {}
+
+func (*Event_EpochTransition) isEvent_Payload() {}
+
+func (*Event_DropReport) isEvent_Payload() {}
+
+func (*Event_MitmRequest) isEvent_Payload() {}
+
+// ConnectionClosed is emitted once per outbound connection that finished.
+type ConnectionClosed struct {
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	ConnectionId string                 `protobuf:"bytes,1,opt,name=connection_id,json=connectionId,proto3" json:"connection_id,omitempty"`
+	Proxyset     string                 `protobuf:"bytes,2,opt,name=proxyset,proto3" json:"proxyset,omitempty"`
+	Provider     string                 `protobuf:"bytes,3,opt,name=provider,proto3" json:"provider,omitempty"`
+	// First 16 bytes of SHA-256 over the canonical JSON of the session params,
+	// lowercase hex (32 chars). Canonical form: keys sorted, no whitespace,
+	// numbers in their natural JSON form. The gateway computes this locally.
+	SessionParamsHash      string `protobuf:"bytes,4,opt,name=session_params_hash,json=sessionParamsHash,proto3" json:"session_params_hash,omitempty"`
+	SessionDurationMinutes int32  `protobuf:"varint,5,opt,name=session_duration_minutes,json=sessionDurationMinutes,proto3" json:"session_duration_minutes,omitempty"`
+	// Which IP-binding generation this connection belongs to. 0 = initial.
+	Epoch      int32  `protobuf:"varint,6,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	UpstreamIp string `protobuf:"bytes,7,opt,name=upstream_ip,json=upstreamIp,proto3" json:"upstream_ip,omitempty"`
+	Sni        string `protobuf:"bytes,8,opt,name=sni,proto3" json:"sni,omitempty"`
+	// ok|client_close|upstream_err|timeout|auth_fail
+	CloseReason   string `protobuf:"bytes,9,opt,name=close_reason,json=closeReason,proto3" json:"close_reason,omitempty"`
+	UploadBytes   int64  `protobuf:"varint,10,opt,name=upload_bytes,json=uploadBytes,proto3" json:"upload_bytes,omitempty"`
+	DownloadBytes int64  `protobuf:"varint,11,opt,name=download_bytes,json=downloadBytes,proto3" json:"download_bytes,omitempty"`
+	DurationMs    int64  `protobuf:"varint,12,opt,name=duration_ms,json=durationMs,proto3" json:"duration_ms,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConnectionClosed) Reset() {
+	*x = ConnectionClosed{}
+	mi := &file_ingest_v1_ingest_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConnectionClosed) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConnectionClosed) ProtoMessage() {}
+
+func (x *ConnectionClosed) ProtoReflect() protoreflect.Message {
+	mi := &file_ingest_v1_ingest_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConnectionClosed.ProtoReflect.Descriptor instead.
+func (*ConnectionClosed) Descriptor() ([]byte, []int) {
+	return file_ingest_v1_ingest_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *ConnectionClosed) GetConnectionId() string {
+	if x != nil {
+		return x.ConnectionId
+	}
+	return ""
+}
+
+func (x *ConnectionClosed) GetProxyset() string {
 	if x != nil {
 		return x.Proxyset
 	}
 	return ""
 }
 
-func (x *UsageDelta) GetSessionParams() string {
+func (x *ConnectionClosed) GetProvider() string {
 	if x != nil {
-		return x.SessionParams
+		return x.Provider
 	}
 	return ""
 }
 
-func (x *UsageDelta) GetSessionDurationMinutes() int32 {
+func (x *ConnectionClosed) GetSessionParamsHash() string {
+	if x != nil {
+		return x.SessionParamsHash
+	}
+	return ""
+}
+
+func (x *ConnectionClosed) GetSessionDurationMinutes() int32 {
 	if x != nil {
 		return x.SessionDurationMinutes
 	}
 	return 0
 }
 
-func (x *UsageDelta) GetUploadBytes() int64 {
+func (x *ConnectionClosed) GetEpoch() int32 {
+	if x != nil {
+		return x.Epoch
+	}
+	return 0
+}
+
+func (x *ConnectionClosed) GetUpstreamIp() string {
+	if x != nil {
+		return x.UpstreamIp
+	}
+	return ""
+}
+
+func (x *ConnectionClosed) GetSni() string {
+	if x != nil {
+		return x.Sni
+	}
+	return ""
+}
+
+func (x *ConnectionClosed) GetCloseReason() string {
+	if x != nil {
+		return x.CloseReason
+	}
+	return ""
+}
+
+func (x *ConnectionClosed) GetUploadBytes() int64 {
 	if x != nil {
 		return x.UploadBytes
 	}
 	return 0
 }
 
-func (x *UsageDelta) GetDownloadBytes() int64 {
+func (x *ConnectionClosed) GetDownloadBytes() int64 {
 	if x != nil {
 		return x.DownloadBytes
 	}
 	return 0
 }
 
-type RecordUsageAck struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+func (x *ConnectionClosed) GetDurationMs() int64 {
+	if x != nil {
+		return x.DurationMs
+	}
+	return 0
+}
+
+// EpochTransition is emitted whenever the IP bound to a logical session
+// changes. The very first binding is also a transition (start_reason =
+// "first_bind", prev_epoch = -1).
+type EpochTransition struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	SessionParamsHash string                 `protobuf:"bytes,1,opt,name=session_params_hash,json=sessionParamsHash,proto3" json:"session_params_hash,omitempty"`
+	// Canonical JSON of the session params. Populated on first_bind so the
+	// ingest server can backfill session_params_dim.params_json. May be empty
+	// on subsequent transitions.
+	ParamsJson string `protobuf:"bytes,2,opt,name=params_json,json=paramsJson,proto3" json:"params_json,omitempty"`
+	Proxyset   string `protobuf:"bytes,3,opt,name=proxyset,proto3" json:"proxyset,omitempty"`
+	Provider   string `protobuf:"bytes,4,opt,name=provider,proto3" json:"provider,omitempty"`
+	PrevEpoch  int32  `protobuf:"varint,5,opt,name=prev_epoch,json=prevEpoch,proto3" json:"prev_epoch,omitempty"` // -1 on first_bind
+	NewEpoch   int32  `protobuf:"varint,6,opt,name=new_epoch,json=newEpoch,proto3" json:"new_epoch,omitempty"`
+	PrevIp     string `protobuf:"bytes,7,opt,name=prev_ip,json=prevIp,proto3" json:"prev_ip,omitempty"` // empty on first_bind
+	NewIp      string `protobuf:"bytes,8,opt,name=new_ip,json=newIp,proto3" json:"new_ip,omitempty"`
+	// first_bind|ttl|forced|burned|upstream_5xx|client_signal|pool_reshuffle
+	StartReason   string `protobuf:"bytes,9,opt,name=start_reason,json=startReason,proto3" json:"start_reason,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *RecordUsageAck) Reset() {
-	*x = RecordUsageAck{}
-	mi := &file_ingest_v1_ingest_proto_msgTypes[1]
+func (x *EpochTransition) Reset() {
+	*x = EpochTransition{}
+	mi := &file_ingest_v1_ingest_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *RecordUsageAck) String() string {
+func (x *EpochTransition) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*RecordUsageAck) ProtoMessage() {}
+func (*EpochTransition) ProtoMessage() {}
 
-func (x *RecordUsageAck) ProtoReflect() protoreflect.Message {
-	mi := &file_ingest_v1_ingest_proto_msgTypes[1]
+func (x *EpochTransition) ProtoReflect() protoreflect.Message {
+	mi := &file_ingest_v1_ingest_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -140,27 +339,273 @@ func (x *RecordUsageAck) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use RecordUsageAck.ProtoReflect.Descriptor instead.
-func (*RecordUsageAck) Descriptor() ([]byte, []int) {
-	return file_ingest_v1_ingest_proto_rawDescGZIP(), []int{1}
+// Deprecated: Use EpochTransition.ProtoReflect.Descriptor instead.
+func (*EpochTransition) Descriptor() ([]byte, []int) {
+	return file_ingest_v1_ingest_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *EpochTransition) GetSessionParamsHash() string {
+	if x != nil {
+		return x.SessionParamsHash
+	}
+	return ""
+}
+
+func (x *EpochTransition) GetParamsJson() string {
+	if x != nil {
+		return x.ParamsJson
+	}
+	return ""
+}
+
+func (x *EpochTransition) GetProxyset() string {
+	if x != nil {
+		return x.Proxyset
+	}
+	return ""
+}
+
+func (x *EpochTransition) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *EpochTransition) GetPrevEpoch() int32 {
+	if x != nil {
+		return x.PrevEpoch
+	}
+	return 0
+}
+
+func (x *EpochTransition) GetNewEpoch() int32 {
+	if x != nil {
+		return x.NewEpoch
+	}
+	return 0
+}
+
+func (x *EpochTransition) GetPrevIp() string {
+	if x != nil {
+		return x.PrevIp
+	}
+	return ""
+}
+
+func (x *EpochTransition) GetNewIp() string {
+	if x != nil {
+		return x.NewIp
+	}
+	return ""
+}
+
+func (x *EpochTransition) GetStartReason() string {
+	if x != nil {
+		return x.StartReason
+	}
+	return ""
+}
+
+// DropReport surfaces silent loss caused by the gateway's bounded send queue
+// filling up. Emitted periodically so dashboards can show known data loss.
+type DropReport struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	DroppedEvents int64                  `protobuf:"varint,1,opt,name=dropped_events,json=droppedEvents,proto3" json:"dropped_events,omitempty"`
+	WindowStart   *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=window_start,json=windowStart,proto3" json:"window_start,omitempty"`
+	WindowEnd     *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=window_end,json=windowEnd,proto3" json:"window_end,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DropReport) Reset() {
+	*x = DropReport{}
+	mi := &file_ingest_v1_ingest_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DropReport) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DropReport) ProtoMessage() {}
+
+func (x *DropReport) ProtoReflect() protoreflect.Message {
+	mi := &file_ingest_v1_ingest_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DropReport.ProtoReflect.Descriptor instead.
+func (*DropReport) Descriptor() ([]byte, []int) {
+	return file_ingest_v1_ingest_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *DropReport) GetDroppedEvents() int64 {
+	if x != nil {
+		return x.DroppedEvents
+	}
+	return 0
+}
+
+func (x *DropReport) GetWindowStart() *timestamppb.Timestamp {
+	if x != nil {
+		return x.WindowStart
+	}
+	return nil
+}
+
+func (x *DropReport) GetWindowEnd() *timestamppb.Timestamp {
+	if x != nil {
+		return x.WindowEnd
+	}
+	return nil
+}
+
+// MitmRequest is reserved for the MITM feature. The variant exists so adding
+// emission later is non-breaking; the field set will be designed when MITM
+// goes to production.
+type MitmRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MitmRequest) Reset() {
+	*x = MitmRequest{}
+	mi := &file_ingest_v1_ingest_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MitmRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MitmRequest) ProtoMessage() {}
+
+func (x *MitmRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ingest_v1_ingest_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MitmRequest.ProtoReflect.Descriptor instead.
+func (*MitmRequest) Descriptor() ([]byte, []int) {
+	return file_ingest_v1_ingest_proto_rawDescGZIP(), []int{4}
+}
+
+type RecordAck struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Accepted      uint64                 `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RecordAck) Reset() {
+	*x = RecordAck{}
+	mi := &file_ingest_v1_ingest_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RecordAck) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RecordAck) ProtoMessage() {}
+
+func (x *RecordAck) ProtoReflect() protoreflect.Message {
+	mi := &file_ingest_v1_ingest_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RecordAck.ProtoReflect.Descriptor instead.
+func (*RecordAck) Descriptor() ([]byte, []int) {
+	return file_ingest_v1_ingest_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *RecordAck) GetAccepted() uint64 {
+	if x != nil {
+		return x.Accepted
+	}
+	return 0
 }
 
 var File_ingest_v1_ingest_proto protoreflect.FileDescriptor
 
 const file_ingest_v1_ingest_proto_rawDesc = "" +
 	"\n" +
-	"\x16ingest/v1/ingest.proto\x12\tingest.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x8d\x02\n" +
+	"\x16ingest/v1/ingest.proto\x12\tingest.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xe5\x02\n" +
+	"\x05Event\x12*\n" +
+	"\x02ts\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\x02ts\x12\x19\n" +
+	"\bevent_id\x18\x02 \x01(\tR\aeventId\x12J\n" +
+	"\x11connection_closed\x18\n" +
+	" \x01(\v2\x1b.ingest.v1.ConnectionClosedH\x00R\x10connectionClosed\x12G\n" +
+	"\x10epoch_transition\x18\v \x01(\v2\x1a.ingest.v1.EpochTransitionH\x00R\x0fepochTransition\x128\n" +
+	"\vdrop_report\x18\f \x01(\v2\x15.ingest.v1.DropReportH\x00R\n" +
+	"dropReport\x12;\n" +
+	"\fmitm_request\x18\r \x01(\v2\x16.ingest.v1.MitmRequestH\x00R\vmitmRequestB\t\n" +
+	"\apayload\"\xb0\x03\n" +
+	"\x10ConnectionClosed\x12#\n" +
+	"\rconnection_id\x18\x01 \x01(\tR\fconnectionId\x12\x1a\n" +
+	"\bproxyset\x18\x02 \x01(\tR\bproxyset\x12\x1a\n" +
+	"\bprovider\x18\x03 \x01(\tR\bprovider\x12.\n" +
+	"\x13session_params_hash\x18\x04 \x01(\tR\x11sessionParamsHash\x128\n" +
+	"\x18session_duration_minutes\x18\x05 \x01(\x05R\x16sessionDurationMinutes\x12\x14\n" +
+	"\x05epoch\x18\x06 \x01(\x05R\x05epoch\x12\x1f\n" +
+	"\vupstream_ip\x18\a \x01(\tR\n" +
+	"upstreamIp\x12\x10\n" +
+	"\x03sni\x18\b \x01(\tR\x03sni\x12!\n" +
+	"\fclose_reason\x18\t \x01(\tR\vcloseReason\x12!\n" +
+	"\fupload_bytes\x18\n" +
+	" \x01(\x03R\vuploadBytes\x12%\n" +
+	"\x0edownload_bytes\x18\v \x01(\x03R\rdownloadBytes\x12\x1f\n" +
+	"\vduration_ms\x18\f \x01(\x03R\n" +
+	"durationMs\"\xa9\x02\n" +
+	"\x0fEpochTransition\x12.\n" +
+	"\x13session_params_hash\x18\x01 \x01(\tR\x11sessionParamsHash\x12\x1f\n" +
+	"\vparams_json\x18\x02 \x01(\tR\n" +
+	"paramsJson\x12\x1a\n" +
+	"\bproxyset\x18\x03 \x01(\tR\bproxyset\x12\x1a\n" +
+	"\bprovider\x18\x04 \x01(\tR\bprovider\x12\x1d\n" +
 	"\n" +
-	"UsageDelta\x128\n" +
-	"\ttimestamp\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x12\x1a\n" +
-	"\bproxyset\x18\x02 \x01(\tR\bproxyset\x12%\n" +
-	"\x0esession_params\x18\x03 \x01(\tR\rsessionParams\x128\n" +
-	"\x18session_duration_minutes\x18\x04 \x01(\x05R\x16sessionDurationMinutes\x12!\n" +
-	"\fupload_bytes\x18\x05 \x01(\x03R\vuploadBytes\x12%\n" +
-	"\x0edownload_bytes\x18\x06 \x01(\x03R\rdownloadBytes\"\x10\n" +
-	"\x0eRecordUsageAck2M\n" +
-	"\x06Ingest\x12C\n" +
-	"\vRecordUsage\x12\x15.ingest.v1.UsageDelta\x1a\x19.ingest.v1.RecordUsageAck\"\x00(\x01B0Z.proxy-gateway/analytics/gen/ingest/v1;ingestv1b\x06proto3"
+	"prev_epoch\x18\x05 \x01(\x05R\tprevEpoch\x12\x1b\n" +
+	"\tnew_epoch\x18\x06 \x01(\x05R\bnewEpoch\x12\x17\n" +
+	"\aprev_ip\x18\a \x01(\tR\x06prevIp\x12\x15\n" +
+	"\x06new_ip\x18\b \x01(\tR\x05newIp\x12!\n" +
+	"\fstart_reason\x18\t \x01(\tR\vstartReason\"\xad\x01\n" +
+	"\n" +
+	"DropReport\x12%\n" +
+	"\x0edropped_events\x18\x01 \x01(\x03R\rdroppedEvents\x12=\n" +
+	"\fwindow_start\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\vwindowStart\x129\n" +
+	"\n" +
+	"window_end\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\twindowEnd\"\r\n" +
+	"\vMitmRequest\"'\n" +
+	"\tRecordAck\x12\x1a\n" +
+	"\baccepted\x18\x01 \x01(\x04R\baccepted2D\n" +
+	"\x06Ingest\x12:\n" +
+	"\fRecordEvents\x12\x10.ingest.v1.Event\x1a\x14.ingest.v1.RecordAck\"\x00(\x01B0Z.proxy-gateway/analytics/gen/ingest/v1;ingestv1b\x06proto3"
 
 var (
 	file_ingest_v1_ingest_proto_rawDescOnce sync.Once
@@ -174,21 +619,31 @@ func file_ingest_v1_ingest_proto_rawDescGZIP() []byte {
 	return file_ingest_v1_ingest_proto_rawDescData
 }
 
-var file_ingest_v1_ingest_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_ingest_v1_ingest_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_ingest_v1_ingest_proto_goTypes = []any{
-	(*UsageDelta)(nil),            // 0: ingest.v1.UsageDelta
-	(*RecordUsageAck)(nil),        // 1: ingest.v1.RecordUsageAck
-	(*timestamppb.Timestamp)(nil), // 2: google.protobuf.Timestamp
+	(*Event)(nil),                 // 0: ingest.v1.Event
+	(*ConnectionClosed)(nil),      // 1: ingest.v1.ConnectionClosed
+	(*EpochTransition)(nil),       // 2: ingest.v1.EpochTransition
+	(*DropReport)(nil),            // 3: ingest.v1.DropReport
+	(*MitmRequest)(nil),           // 4: ingest.v1.MitmRequest
+	(*RecordAck)(nil),             // 5: ingest.v1.RecordAck
+	(*timestamppb.Timestamp)(nil), // 6: google.protobuf.Timestamp
 }
 var file_ingest_v1_ingest_proto_depIdxs = []int32{
-	2, // 0: ingest.v1.UsageDelta.timestamp:type_name -> google.protobuf.Timestamp
-	0, // 1: ingest.v1.Ingest.RecordUsage:input_type -> ingest.v1.UsageDelta
-	1, // 2: ingest.v1.Ingest.RecordUsage:output_type -> ingest.v1.RecordUsageAck
-	2, // [2:3] is the sub-list for method output_type
-	1, // [1:2] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	6, // 0: ingest.v1.Event.ts:type_name -> google.protobuf.Timestamp
+	1, // 1: ingest.v1.Event.connection_closed:type_name -> ingest.v1.ConnectionClosed
+	2, // 2: ingest.v1.Event.epoch_transition:type_name -> ingest.v1.EpochTransition
+	3, // 3: ingest.v1.Event.drop_report:type_name -> ingest.v1.DropReport
+	4, // 4: ingest.v1.Event.mitm_request:type_name -> ingest.v1.MitmRequest
+	6, // 5: ingest.v1.DropReport.window_start:type_name -> google.protobuf.Timestamp
+	6, // 6: ingest.v1.DropReport.window_end:type_name -> google.protobuf.Timestamp
+	0, // 7: ingest.v1.Ingest.RecordEvents:input_type -> ingest.v1.Event
+	5, // 8: ingest.v1.Ingest.RecordEvents:output_type -> ingest.v1.RecordAck
+	8, // [8:9] is the sub-list for method output_type
+	7, // [7:8] is the sub-list for method input_type
+	7, // [7:7] is the sub-list for extension type_name
+	7, // [7:7] is the sub-list for extension extendee
+	0, // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_ingest_v1_ingest_proto_init() }
@@ -196,13 +651,19 @@ func file_ingest_v1_ingest_proto_init() {
 	if File_ingest_v1_ingest_proto != nil {
 		return
 	}
+	file_ingest_v1_ingest_proto_msgTypes[0].OneofWrappers = []any{
+		(*Event_ConnectionClosed)(nil),
+		(*Event_EpochTransition)(nil),
+		(*Event_DropReport)(nil),
+		(*Event_MitmRequest)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ingest_v1_ingest_proto_rawDesc), len(file_ingest_v1_ingest_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

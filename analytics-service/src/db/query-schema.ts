@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 // ---------------------------------------------------------------------------
-// Schema (browser-safe — no libSQL imports)
+// Schema (browser-safe — no DB imports)
 // ---------------------------------------------------------------------------
 
 const JsonKey = z.string().regex(/^[A-Za-z0-9_.\-]+$/, 'invalid json key');
@@ -19,8 +19,12 @@ const Time = z.object({
 
 const Metric = z.enum(['connections', 'upload_bytes', 'download_bytes', 'total_bytes']);
 
+// Built-in column dimensions plus a JSON-extraction dimension that reaches
+// into session_params_dim.params_json via the canonical hash join.
 const Dimension = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('proxyset'), as: z.string().optional() }),
+  z.object({ kind: z.literal('proxyset'),     as: z.string().optional() }),
+  z.object({ kind: z.literal('provider'),     as: z.string().optional() }),
+  z.object({ kind: z.literal('close_reason'), as: z.string().optional() }),
   z.object({ kind: z.literal('json'), key: JsonKey, as: z.string().optional() }),
 ]);
 
@@ -34,6 +38,14 @@ const Where = z.object({
   proxyset_ne:              z.string().optional(),
   proxyset_in:              z.array(z.string()).min(1).optional(),
   proxyset_not_in:          z.array(z.string()).min(1).optional(),
+
+  provider_eq:              z.string().optional(),
+  provider_ne:              z.string().optional(),
+  provider_in:              z.array(z.string()).min(1).optional(),
+  provider_not_in:          z.array(z.string()).min(1).optional(),
+
+  close_reason_eq:          z.string().optional(),
+  close_reason_in:          z.array(z.string()).min(1).optional(),
 
   session_duration_eq:      z.int().optional(),
   session_duration_ne:      z.int().optional(),
@@ -76,7 +88,29 @@ const MAX_BUCKETS = 10_000;
 
 export function dimName(d: Dimension): string {
   if (d.as) return d.as;
-  return d.kind === 'proxyset' ? 'proxyset' : d.key;
+  switch (d.kind) {
+    case 'proxyset':     return 'proxyset';
+    case 'provider':     return 'provider';
+    case 'close_reason': return 'close_reason';
+    case 'json':         return d.key;
+  }
+}
+
+// dimRequiresDim returns true when this dimension/filter needs the dim-table
+// JOIN to be present in the rendered SQL.
+export function dimRequiresDim(d: Dimension): boolean {
+  return d.kind === 'json';
+}
+
+export function whereRequiresDim(w?: Where): boolean {
+  if (!w) return false;
+  return Boolean(
+    w.session_params_eq ||
+      w.session_params_ne ||
+      w.session_params_in ||
+      w.session_params_not_in ||
+      w.session_params_has_key,
+  );
 }
 
 export function validate(input: unknown): { ok: true; query: UsageQuery } | { ok: false; errors: QueryError[] } {

@@ -21,6 +21,10 @@ const (
 	ctxTopLevelSeed sessionMgrCtxKey = iota
 	ctxSeedTTL
 	ctxSessionLabel
+	ctxSessionParamsHash
+	ctxProxysetName
+	ctxSessionParamsJSON
+	ctxProviderName
 )
 
 // WithTopLevelSeed stores the top-level seed in context.
@@ -63,6 +67,60 @@ func GetSessionLabel(ctx context.Context) string {
 	return v
 }
 
+// WithSessionParamsHash stores the analytics hash (first 16 bytes of
+// SHA-256 over the canonical JSON of the session params, hex-encoded).
+// The SessionManager uses this as the key for per-hash epoch tracking and
+// includes it in EpochEvent payloads. Set this in your auth/parse middleware
+// alongside WithTopLevelSeed.
+func WithSessionParamsHash(ctx context.Context, hash string) context.Context {
+	return context.WithValue(ctx, ctxSessionParamsHash, hash)
+}
+
+// GetSessionParamsHash reads the session_params_hash from context.
+func GetSessionParamsHash(ctx context.Context) string {
+	v, _ := ctx.Value(ctxSessionParamsHash).(string)
+	return v
+}
+
+// WithProxysetName stores the human-readable proxyset name. Used only as
+// metadata on EpochEvents; the SessionManager itself doesn't read it for
+// dispatch.
+func WithProxysetName(ctx context.Context, name string) context.Context {
+	return context.WithValue(ctx, ctxProxysetName, name)
+}
+
+// GetProxysetName reads the proxyset name from context.
+func GetProxysetName(ctx context.Context) string {
+	v, _ := ctx.Value(ctxProxysetName).(string)
+	return v
+}
+
+// WithSessionParamsJSON stores the canonical JSON of the session params.
+// Carried on EpochEvents with start_reason="first_bind" so the analytics
+// server can backfill session_params_dim.params_json.
+func WithSessionParamsJSON(ctx context.Context, json string) context.Context {
+	return context.WithValue(ctx, ctxSessionParamsJSON, json)
+}
+
+// GetSessionParamsJSON reads the canonical session params JSON from context.
+func GetSessionParamsJSON(ctx context.Context) string {
+	v, _ := ctx.Value(ctxSessionParamsJSON).(string)
+	return v
+}
+
+// WithProviderName stores the upstream provider identifier (e.g.
+// "bottingtools", "geonode", "static_file"). Threaded into EpochEvents and
+// per-connection records.
+func WithProviderName(ctx context.Context, provider string) context.Context {
+	return context.WithValue(ctx, ctxProviderName, provider)
+}
+
+// GetProviderName reads the provider identifier from context.
+func GetProviderName(ctx context.Context) string {
+	v, _ := ctx.Value(ctxProviderName).(string)
+	return v
+}
+
 // ---------------------------------------------------------------------------
 // SessionInfo — introspection
 // ---------------------------------------------------------------------------
@@ -75,9 +133,41 @@ type SessionInfo struct {
 	Upstream       string    `json:"upstream"`
 	Seed           uint64    `json:"seed"`
 	Rotation       uint64    `json:"rotation"`
+	Epoch          int32     `json:"epoch"`
 	CreatedAt      time.Time `json:"created_at"`
 	ExpiresAt      time.Time `json:"expires_at"`
 	LastRotationAt time.Time `json:"last_rotation_at"`
+}
+
+// ---------------------------------------------------------------------------
+// EpochListener — analytics hook
+// ---------------------------------------------------------------------------
+
+// EpochEvent describes an IP-binding transition for a logical session. It is
+// emitted whenever the IP associated with a session_params_hash changes.
+//
+// PrevEpoch is -1 on first_bind; PrevIP is empty on first_bind.
+type EpochEvent struct {
+	SessionParamsHash string
+	// ParamsJSON is the canonical JSON of the session params. Populated on
+	// first_bind so the consumer can backfill any identity tables; empty on
+	// subsequent transitions.
+	ParamsJSON   string
+	ProxysetName string
+	ProviderName string
+	PrevEpoch    int32
+	NewEpoch     int32
+	PrevIP       string
+	NewIP        string
+	// first_bind | ttl | forced
+	StartReason string
+}
+
+// EpochListener receives an event each time the SessionManager binds a new
+// IP to a session. The callback runs synchronously inside SessionManager —
+// it must be non-blocking (e.g. enqueue to an analytics client).
+type EpochListener interface {
+	OnEpochTransition(ev EpochEvent)
 }
 
 // ---------------------------------------------------------------------------
@@ -90,43 +180,65 @@ type sessionEntry struct {
 	proxy          proxykit.Proxy
 	seed           *proxykit.SessionSeed
 	rotation       uint64
-	resolveCtx     context.Context // carries domain values for re-resolve on managed rotate
+	epoch          int32  // current IP-binding generation, monotonic per hash
+	hash           string // session_params_hash captured at create-time
+	proxyset       string // proxyset name captured at create-time
+	provider       string // provider name captured at create-time
+	resolveCtx     context.Context
 	startedAt      time.Time
 	expiresAt      time.Time
 	lastRotationAt time.Time
 	duration       time.Duration
 }
 
+// hashState tracks the last-known epoch and IP for a given session hash so
+// that epoch numbering remains monotonic across TTL evictions. Entries here
+// outlive sessionEntry: when an entry is evicted by the cleanup goroutine,
+// hashState[hash] survives so the next Resolve emits ttl→epoch=N+1, not a
+// fresh first_bind→epoch=0.
+type hashState struct {
+	lastEpoch int32
+	lastIP    string
+}
+
 // SessionManager is Handler middleware that combines a top-level seed (uint64),
 // a TTL, and a rotation counter into a deterministic *proxykit.SessionSeed.
 //
-// It reads GetTopLevelSeed/GetSeedTTL from context and:
-//
-//   - TTL > 0: looks up its cache keyed by the top-level seed. On hit, returns
-//     the cached proxy. On miss, picks a random rotation, computes
-//     SessionSeed = hash(topLevelSeed + rotation), stores it in context
-//     via proxykit.WithSessionSeed, calls next, and caches the result.
-//   - TTL = 0 or zero seed: passes through with no SessionSeed in context (nil).
-//     Sources decide what nil means for their domain.
-//
-// RotateNow re-rolls rotation to a fresh random uint64 → new
-// SessionSeed → new source choices.
+// It also tracks IP-binding generations (epochs) per session_params_hash and,
+// when configured with an EpochListener, fires an event on each transition.
 type SessionManager struct {
-	next    proxykit.Handler
-	mu      sync.RWMutex
-	entries map[uint64]*sessionEntry
-	nextID  atomic.Uint64
+	next     proxykit.Handler
+	listener EpochListener
+
+	mu          sync.RWMutex
+	entries     map[uint64]*sessionEntry
+	hashState   map[string]*hashState
+	nextID      atomic.Uint64
 }
 
 // NewSessionManager creates a SessionManager wrapping the given next handler.
 // A cleanup goroutine prunes expired entries every 60 seconds.
 func NewSessionManager(next proxykit.Handler) *SessionManager {
+	return NewSessionManagerWithListener(next, nil)
+}
+
+// NewSessionManagerWithListener is like NewSessionManager but also installs
+// an EpochListener that receives an event on every IP-binding transition.
+func NewSessionManagerWithListener(next proxykit.Handler, listener EpochListener) *SessionManager {
 	m := &SessionManager{
-		next:    next,
-		entries: make(map[uint64]*sessionEntry),
+		next:      next,
+		listener:  listener,
+		entries:   make(map[uint64]*sessionEntry),
+		hashState: make(map[string]*hashState),
 	}
 	go m.runCleanup()
 	return m
+}
+
+// SetEpochListener installs (or replaces) the EpochListener. Safe to call
+// before the manager is in use; not safe to call concurrently with Resolve.
+func (m *SessionManager) SetEpochListener(l EpochListener) {
+	m.listener = l
 }
 
 // Resolve implements proxykit.Handler.
@@ -155,19 +267,11 @@ func (m *SessionManager) Resolve(ctx context.Context, req *proxykit.Request) (*p
 		return result, err
 	}
 
+	hash := GetSessionParamsHash(ctx)
+	proxyset := GetProxysetName(ctx)
+	provider := GetProviderName(ctx)
+	newIP := result.Proxy.Host
 	now := time.Now().UTC()
-	ne := &sessionEntry{
-		id:             m.nextID.Add(1) - 1,
-		label:          GetSessionLabel(ctx),
-		proxy:          *result.Proxy,
-		seed:           seed,
-		rotation:       rotation,
-		resolveCtx:     ctx,
-		startedAt:      now,
-		expiresAt:      now.Add(ttl),
-		lastRotationAt: now,
-		duration:       ttl,
-	}
 
 	m.mu.Lock()
 	if existing, ok := m.entries[tls]; ok && time.Now().Before(existing.expiresAt) {
@@ -175,8 +279,62 @@ func (m *SessionManager) Resolve(ctx context.Context, req *proxykit.Request) (*p
 		m.mu.Unlock()
 		return proxykit.Resolved(&p), nil
 	}
+
+	var ev *EpochEvent
+	if hash != "" {
+		prev, hadPrev := m.hashState[hash]
+		var newEpoch int32
+		startReason := "first_bind"
+		prevEpoch := int32(-1)
+		prevIP := ""
+		if hadPrev {
+			newEpoch = prev.lastEpoch + 1
+			prevEpoch = prev.lastEpoch
+			prevIP = prev.lastIP
+			startReason = "ttl"
+		}
+		m.hashState[hash] = &hashState{lastEpoch: newEpoch, lastIP: newIP}
+		paramsJSON := ""
+		if startReason == "first_bind" {
+			paramsJSON = GetSessionParamsJSON(ctx)
+		}
+		ev = &EpochEvent{
+			SessionParamsHash: hash,
+			ParamsJSON:        paramsJSON,
+			ProxysetName:      proxyset,
+			ProviderName:      provider,
+			PrevEpoch:         prevEpoch,
+			NewEpoch:          newEpoch,
+			PrevIP:            prevIP,
+			NewIP:             newIP,
+			StartReason:       startReason,
+		}
+	}
+
+	ne := &sessionEntry{
+		id:             m.nextID.Add(1) - 1,
+		label:          GetSessionLabel(ctx),
+		proxy:          *result.Proxy,
+		seed:           seed,
+		rotation:       rotation,
+		hash:           hash,
+		proxyset:       proxyset,
+		provider:       provider,
+		resolveCtx:     ctx,
+		startedAt:      now,
+		expiresAt:      now.Add(ttl),
+		lastRotationAt: now,
+		duration:       ttl,
+	}
+	if ev != nil {
+		ne.epoch = ev.NewEpoch
+	}
 	m.entries[tls] = ne
 	m.mu.Unlock()
+
+	if ev != nil && m.listener != nil {
+		m.listener.OnEpochTransition(*ev)
+	}
 
 	return result, nil
 }
@@ -205,12 +363,45 @@ func (m *SessionManager) RotateNow(topLevelSeed uint64) (*SessionInfo, error) {
 	}
 
 	now := time.Now().UTC()
+	newIP := result.Proxy.Host
+	var ev *EpochEvent
+
 	m.mu.Lock()
 	e, ok = m.entries[topLevelSeed]
 	if !ok {
 		m.mu.Unlock()
 		return nil, nil
 	}
+
+	if e.hash != "" {
+		prev, hadPrev := m.hashState[e.hash]
+		var newEpoch int32
+		var prevEpoch int32
+		var prevIP string
+		if hadPrev {
+			newEpoch = prev.lastEpoch + 1
+			prevEpoch = prev.lastEpoch
+			prevIP = prev.lastIP
+		} else {
+			// Defensive: entry without hashState shouldn't happen, but
+			// recover by treating as first_bind-style numbering.
+			newEpoch = 0
+			prevEpoch = -1
+		}
+		m.hashState[e.hash] = &hashState{lastEpoch: newEpoch, lastIP: newIP}
+		e.epoch = newEpoch
+		ev = &EpochEvent{
+			SessionParamsHash: e.hash,
+			ProxysetName:      e.proxyset,
+			ProviderName:      e.provider,
+			PrevEpoch:         prevEpoch,
+			NewEpoch:          newEpoch,
+			PrevIP:            prevIP,
+			NewIP:             newIP,
+			StartReason:       "forced",
+		}
+	}
+
 	e.proxy = *result.Proxy
 	e.seed = seed
 	e.rotation = nextRotation
@@ -218,6 +409,10 @@ func (m *SessionManager) RotateNow(topLevelSeed uint64) (*SessionInfo, error) {
 	e.expiresAt = now.Add(duration)
 	info := sessionInfoFrom(topLevelSeed, e)
 	m.mu.Unlock()
+
+	if ev != nil && m.listener != nil {
+		m.listener.OnEpochTransition(*ev)
+	}
 
 	return info, nil
 }
@@ -274,6 +469,7 @@ func sessionInfoFrom(topLevelSeed uint64, e *sessionEntry) *SessionInfo {
 		Upstream:       fmt.Sprintf("%s:%d", e.proxy.Host, e.proxy.Port),
 		Seed:           seed,
 		Rotation:       e.rotation,
+		Epoch:          e.epoch,
 		CreatedAt:      e.startedAt,
 		ExpiresAt:      e.expiresAt,
 		LastRotationAt: e.lastRotationAt,

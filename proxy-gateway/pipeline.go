@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"time"
 
 	proxykit "proxy-kit"
 	"proxy-kit/utils"
@@ -25,8 +26,15 @@ func BuildServer(cfg *Config, configDir string, proxyPassword string, tracker *U
 		return nil, err
 	}
 
-	sessions := utils.NewSessionManager(router)
-	inner := trackUsage(tracker, sessions)
+	var listener utils.EpochListener
+	if tracker != nil {
+		// nil-safe: returns nil when tracker.client is nil (analytics disabled).
+		if l := newAnalyticsEpochListener(tracker.client); l != nil {
+			listener = l
+		}
+	}
+	sessions := utils.NewSessionManagerWithListener(router, listener)
+	inner := trackUsage(tracker, sessions, sessions)
 
 	ca, err := loadOrGenerateCA(cfg, configDir)
 	if err != nil {
@@ -103,7 +111,15 @@ func buildProxysetRouter(cfg *Config, configDir string) (proxykit.Handler, error
 		if err != nil {
 			return nil, fmt.Errorf("proxy set %q: %w", raw.Name, err)
 		}
-		sources[raw.Name] = src
+		// Tag the source with its provider type so emission downstream knows
+		// which upstream produced this binding. Captured by value so each set
+		// gets its own closure.
+		provider := raw.SourceType
+		baseSrc := src
+		sources[raw.Name] = proxykit.HandlerFunc(func(ctx context.Context, req *proxykit.Request) (*proxykit.Result, error) {
+			ctx = utils.WithProviderName(ctx, provider)
+			return baseSrc.Resolve(ctx, req)
+		})
 	}
 
 	return proxykit.HandlerFunc(func(ctx context.Context, req *proxykit.Request) (*proxykit.Result, error) {
@@ -116,10 +132,19 @@ func buildProxysetRouter(cfg *Config, configDir string) (proxykit.Handler, error
 	}), nil
 }
 
+// epochLookup is the minimum SessionManager surface trackUsage needs to
+// snapshot the active epoch onto each connection. Decoupled so tests can
+// inject a fake.
+type epochLookup interface {
+	GetSession(topLevelSeed uint64) *utils.SessionInfo
+}
+
 // trackUsage wraps next and chains a usageConnTracker onto every Result so
-// that byte totals are recorded when each connection closes.
+// that byte totals are recorded when each connection closes. epochSrc is
+// queried after next.Resolve to snapshot the current epoch for the session;
+// pass nil to disable epoch lookup (epoch=0 on every event).
 // If tracker is nil the middleware is a no-op passthrough.
-func trackUsage(tracker *UsageTracker, next proxykit.Handler) proxykit.Handler {
+func trackUsage(tracker *UsageTracker, epochSrc epochLookup, next proxykit.Handler) proxykit.Handler {
 	if tracker == nil {
 		return next
 	}
@@ -128,11 +153,28 @@ func trackUsage(tracker *UsageTracker, next proxykit.Handler) proxykit.Handler {
 		if err != nil || result == nil {
 			return result, err
 		}
+		upstreamIP := ""
+		if result.Proxy != nil {
+			upstreamIP = result.Proxy.Host
+		}
+		var epoch int32
+		if epochSrc != nil {
+			if info := epochSrc.GetSession(utils.GetTopLevelSeed(ctx)); info != nil {
+				epoch = info.Epoch
+			}
+		}
 		ct := &usageConnTracker{
-			tracker:       tracker,
-			proxyset:      getSet(ctx),
-			sessionParams: getAffinityJSON(ctx),
-			minutes:       getMinutes(ctx),
+			tracker: tracker,
+			rec: connRecord{
+				connectionID:      newConnectionID(),
+				proxyset:          getSet(ctx),
+				provider:          utils.GetProviderName(ctx),
+				sessionParamsHash: utils.GetSessionParamsHash(ctx),
+				minutes:           getMinutes(ctx),
+				epoch:             epoch,
+				upstreamIP:        upstreamIP,
+				startedAt:         time.Now().UTC(),
+			},
 		}
 		result.ConnTracker = proxykit.ChainTrackers(result.ConnTracker, ct)
 		return result, nil

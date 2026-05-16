@@ -19,17 +19,21 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Ingest_RecordUsage_FullMethodName = "/ingest.v1.Ingest/RecordUsage"
+	Ingest_RecordEvents_FullMethodName = "/ingest.v1.Ingest/RecordEvents"
 )
 
 // IngestClient is the client API for Ingest service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// Ingest is the write-only API the proxy-gateway uses to push usage data.
+// Ingest is the write-only API the proxy-gateway uses to push observability
+// events. Events are streamed and the server is fire-and-forget from the
+// gateway's perspective.
 type IngestClient interface {
-	// RecordUsage streams one UsageDelta per closed connection.
-	RecordUsage(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[UsageDelta, RecordUsageAck], error)
+	// RecordEvents streams Event messages. Each Event carries one variant in
+	// its `payload` oneof. event_id is the idempotency key; the server uses
+	// INSERT OR IGNORE on it.
+	RecordEvents(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[Event, RecordAck], error)
 }
 
 type ingestClient struct {
@@ -40,27 +44,31 @@ func NewIngestClient(cc grpc.ClientConnInterface) IngestClient {
 	return &ingestClient{cc}
 }
 
-func (c *ingestClient) RecordUsage(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[UsageDelta, RecordUsageAck], error) {
+func (c *ingestClient) RecordEvents(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[Event, RecordAck], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &Ingest_ServiceDesc.Streams[0], Ingest_RecordUsage_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &Ingest_ServiceDesc.Streams[0], Ingest_RecordEvents_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[UsageDelta, RecordUsageAck]{ClientStream: stream}
+	x := &grpc.GenericClientStream[Event, RecordAck]{ClientStream: stream}
 	return x, nil
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type Ingest_RecordUsageClient = grpc.ClientStreamingClient[UsageDelta, RecordUsageAck]
+type Ingest_RecordEventsClient = grpc.ClientStreamingClient[Event, RecordAck]
 
 // IngestServer is the server API for Ingest service.
 // All implementations must embed UnimplementedIngestServer
 // for forward compatibility.
 //
-// Ingest is the write-only API the proxy-gateway uses to push usage data.
+// Ingest is the write-only API the proxy-gateway uses to push observability
+// events. Events are streamed and the server is fire-and-forget from the
+// gateway's perspective.
 type IngestServer interface {
-	// RecordUsage streams one UsageDelta per closed connection.
-	RecordUsage(grpc.ClientStreamingServer[UsageDelta, RecordUsageAck]) error
+	// RecordEvents streams Event messages. Each Event carries one variant in
+	// its `payload` oneof. event_id is the idempotency key; the server uses
+	// INSERT OR IGNORE on it.
+	RecordEvents(grpc.ClientStreamingServer[Event, RecordAck]) error
 	mustEmbedUnimplementedIngestServer()
 }
 
@@ -71,8 +79,8 @@ type IngestServer interface {
 // pointer dereference when methods are called.
 type UnimplementedIngestServer struct{}
 
-func (UnimplementedIngestServer) RecordUsage(grpc.ClientStreamingServer[UsageDelta, RecordUsageAck]) error {
-	return status.Error(codes.Unimplemented, "method RecordUsage not implemented")
+func (UnimplementedIngestServer) RecordEvents(grpc.ClientStreamingServer[Event, RecordAck]) error {
+	return status.Error(codes.Unimplemented, "method RecordEvents not implemented")
 }
 func (UnimplementedIngestServer) mustEmbedUnimplementedIngestServer() {}
 func (UnimplementedIngestServer) testEmbeddedByValue()                {}
@@ -95,12 +103,12 @@ func RegisterIngestServer(s grpc.ServiceRegistrar, srv IngestServer) {
 	s.RegisterService(&Ingest_ServiceDesc, srv)
 }
 
-func _Ingest_RecordUsage_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(IngestServer).RecordUsage(&grpc.GenericServerStream[UsageDelta, RecordUsageAck]{ServerStream: stream})
+func _Ingest_RecordEvents_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(IngestServer).RecordEvents(&grpc.GenericServerStream[Event, RecordAck]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type Ingest_RecordUsageServer = grpc.ClientStreamingServer[UsageDelta, RecordUsageAck]
+type Ingest_RecordEventsServer = grpc.ClientStreamingServer[Event, RecordAck]
 
 // Ingest_ServiceDesc is the grpc.ServiceDesc for Ingest service.
 // It's only intended for direct use with grpc.RegisterService,
@@ -111,8 +119,8 @@ var Ingest_ServiceDesc = grpc.ServiceDesc{
 	Methods:     []grpc.MethodDesc{},
 	Streams: []grpc.StreamDesc{
 		{
-			StreamName:    "RecordUsage",
-			Handler:       _Ingest_RecordUsage_Handler,
+			StreamName:    "RecordEvents",
+			Handler:       _Ingest_RecordEvents_Handler,
 			ClientStreams: true,
 		},
 	},

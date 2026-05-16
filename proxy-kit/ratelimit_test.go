@@ -31,9 +31,9 @@ func TestRateLimitConcurrentConnections(t *testing.T) {
 		t.Fatal("expected connection limit error on third resolve")
 	}
 
-	r1.ConnTracker.Close(0, 0)
-	resolveWithIdentity(t, rl, "alice").ConnTracker.Close(0, 0)
-	r2.ConnTracker.Close(0, 0)
+	r1.ConnTracker.Close(0, 0, "test")
+	resolveWithIdentity(t, rl, "alice").ConnTracker.Close(0, 0, "test")
+	r2.ConnTracker.Close(0, 0, "test")
 }
 
 func TestRateLimitBandwidthMidConnection(t *testing.T) {
@@ -54,7 +54,7 @@ func TestRateLimitBandwidthMidConnection(t *testing.T) {
 	if !cancelled {
 		t.Fatal("expected cancel when upload limit exceeded (80+30 > 100)")
 	}
-	r.ConnTracker.Close(110, 0)
+	r.ConnTracker.Close(110, 0, "test")
 }
 
 func TestRateLimitWrapsResultConnTracker(t *testing.T) {
@@ -69,7 +69,7 @@ func TestRateLimitWrapsResultConnTracker(t *testing.T) {
 	if result.ConnTracker == nil {
 		t.Fatal("expected ConnTracker in result")
 	}
-	result.ConnTracker.Close(0, 0)
+	result.ConnTracker.Close(0, 0, "test")
 }
 
 func TestRateLimitEmptyIdentityFallback(t *testing.T) {
@@ -88,7 +88,7 @@ func TestRateLimitEmptyIdentityFallback(t *testing.T) {
 	if _, err := rl.Resolve(context.Background(), &Request{}); err == nil {
 		t.Fatal("expected limit exceeded for shared anonymous bucket")
 	}
-	r.ConnTracker.Close(0, 0)
+	r.ConnTracker.Close(0, 0, "test")
 }
 
 func TestRateLimitCustomKeyFn(t *testing.T) {
@@ -125,6 +125,6 @@ func TestRateLimitCustomKeyFn(t *testing.T) {
 		t.Fatalf("tenant-B should not be rate limited: %v", err)
 	}
 
-	r.ConnTracker.Close(0, 0)
-	r2.ConnTracker.Close(0, 0)
+	r.ConnTracker.Close(0, 0, "test")
+	r2.ConnTracker.Close(0, 0, "test")
 }
