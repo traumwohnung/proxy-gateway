@@ -1,4 +1,6 @@
-// Package utils — Starlark-based MITM bail script.
+// Starlark-based MITM bail script. Engine + lifecycle live here in
+// package main because the bail logic is gateway-specific (it depends on
+// the MITM hook contract from proxy-kit's Result.ResponseHook).
 //
 // A bail script is a short Starlark program that runs server-side on the
 // proxy-gateway against each MITM'd response. It cannot modify status code
@@ -11,7 +13,7 @@
 //
 //   - None (or no explicit return): continue reading from upstream.
 //   - str: bail. Close upstream now. The returned string is the reason and
-//     is surfaced to the client as the X-Bail-Reason response header.
+//     is surfaced to the client as the X-Bail-Script-Output response header.
 //   - any raised exception: log it, disable the script for this request,
 //     keep streaming the response. The error message is surfaced to the
 //     client as the X-Bail-Script-Error header (when not yet sent).
@@ -31,7 +33,7 @@
 // Sandbox: Starlark is hermetic by default (no I/O, no clock, no imports).
 // On top we enforce a per-call wall-clock budget and a step budget; either
 // limit being hit logs and falls back to continue.
-package utils
+package main
 
 import (
 	"context"
@@ -68,9 +70,9 @@ const (
 	// proxy_set.
 	DefaultReleaseCapBytes = 1024 * 1024
 
-	// HeaderBailReason carries the script's bail string when it returned one
-	// before any body was forwarded to the client.
-	HeaderBailReason = "X-Bail-Reason"
+	// HeaderBailScriptOutput carries the script's bail string when it returned
+	// one before any body was forwarded to the client.
+	HeaderBailScriptOutput = "X-Bail-Script-Output"
 
 	// HeaderBailScriptError carries the script's runtime error message when
 	// it raised before any body was forwarded to the client.
@@ -414,7 +416,7 @@ func Apply(ctx context.Context, script *BailScript, resp *http.Response, chunkSi
 func bailResponse(orig *http.Response, bb *bufferedBody, reason string) *http.Response {
 	out := cloneRespShallow(orig)
 	out.Header = cloneHeadersWithoutEncoding(orig.Header)
-	out.Header.Set(HeaderBailReason, reason)
+	out.Header.Set(HeaderBailScriptOutput, reason)
 	body := append([]byte(nil), bb.buf...)
 	out.Body = io.NopCloser(bytesReader(body))
 	out.ContentLength = int64(len(body))

@@ -138,7 +138,7 @@ func buildProxysetRouter(cfg *Config, configDir string) (proxykit.Handler, error
 					if prev != nil {
 						resp = prev(resp)
 					}
-					return utils.Apply(hookCtx, script, resp, 0, 0)
+					return Apply(hookCtx, script, resp, 0, 0)
 				}
 			}
 			return result, nil

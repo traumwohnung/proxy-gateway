@@ -21,7 +21,7 @@ type Username struct {
 	Minutes       int
 	Httpcloak     *utils.HTTPCloakSpec   // optional; triggers MITM + TLS fingerprint spoofing
 	SessionMeta   map[string]interface{} // optional; informational only — never affects session/IP
-	BailScript    *utils.BailScript      // optional; per-request MITM bail filter (Starlark)
+	BailScript    *BailScript            // optional; per-request MITM bail filter (Starlark)
 	Raw           string                 // original JSON string, stored as session label
 }
 
@@ -57,12 +57,12 @@ func ParseUsername(raw string) (*Username, error) {
 	if err != nil {
 		return nil, fmt.Errorf("httpcloak: %w", err)
 	}
-	var script *utils.BailScript
+	var script *BailScript
 	if j.BailScript != "" {
 		if spec == nil {
 			return nil, fmt.Errorf("bail_script requires httpcloak to be set (MITM required)")
 		}
-		script, err = utils.Compile("username", j.BailScript)
+		script, err = Compile("username", j.BailScript)
 		if err != nil {
 			return nil, fmt.Errorf("bail_script: %w", err)
 		}
@@ -141,15 +141,15 @@ func getHTTPCloakSpec(ctx context.Context) *utils.HTTPCloakSpec {
 
 // withBailScript stores the per-request compiled bail-filter script
 // (from username override or per-set default) on the context.
-func withBailScript(ctx context.Context, script *utils.BailScript) context.Context {
+func withBailScript(ctx context.Context, script *BailScript) context.Context {
 	if script == nil {
 		return ctx
 	}
 	return context.WithValue(ctx, ctxBailScript, script)
 }
 
-func getBailScript(ctx context.Context) *utils.BailScript {
-	v, _ := ctx.Value(ctxBailScript).(*utils.BailScript)
+func getBailScript(ctx context.Context) *BailScript {
+	v, _ := ctx.Value(ctxBailScript).(*BailScript)
 	return v
 }
 

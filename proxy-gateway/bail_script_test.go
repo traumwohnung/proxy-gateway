@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	proxykit "proxy-kit"
-	"proxy-kit/utils"
 )
 
 // ── ParseUsername: bail_script field ───────────────────────────────────────
@@ -59,7 +58,7 @@ func TestParseUsername_NoBailScriptIsOK(t *testing.T) {
 // ── ParseJSONCreds: context propagation ────────────────────────────────────
 
 func TestParseJSONCreds_PutsBailScriptOnContext(t *testing.T) {
-	var seen *utils.BailScript
+	var seen *BailScript
 	h := ParseJSONCreds(proxykit.HandlerFunc(func(ctx context.Context, _ *proxykit.Request) (*proxykit.Result, error) {
 		seen = getBailScript(ctx)
 		return &proxykit.Result{Proxy: &proxykit.Proxy{Host: "x", Port: 1}}, nil
@@ -160,8 +159,8 @@ def bail(r):
 	if hooked.StatusCode != 200 {
 		t.Fatalf("status must be preserved, got %d", hooked.StatusCode)
 	}
-	if hooked.Header.Get(utils.HeaderBailReason) != "blocked" {
-		t.Fatalf("X-Bail-Reason=%q", hooked.Header.Get(utils.HeaderBailReason))
+	if hooked.Header.Get(HeaderBailScriptOutput) != "blocked" {
+		t.Fatalf("X-Bail-Reason=%q", hooked.Header.Get(HeaderBailScriptOutput))
 	}
 
 	// Passthrough path: no marker → original status + body intact.
@@ -174,7 +173,7 @@ def bail(r):
 	if hooked2.StatusCode != 200 {
 		t.Fatalf("want 200, got %d", hooked2.StatusCode)
 	}
-	if hooked2.Header.Get(utils.HeaderBailReason) != "" {
+	if hooked2.Header.Get(HeaderBailScriptOutput) != "" {
 		t.Fatalf("unexpected bail header on passthrough")
 	}
 	body2, _ := io.ReadAll(hooked2.Body)
@@ -209,8 +208,8 @@ bail_script = "def bail(r): return None"
 		StatusCode: 200, Header: http.Header{},
 		Body: io.NopCloser(bytes.NewReader([]byte("anything"))),
 	})
-	if hooked.Header.Get(utils.HeaderBailReason) != "override-fires" {
-		t.Fatalf("override did not fire: header=%q", hooked.Header.Get(utils.HeaderBailReason))
+	if hooked.Header.Get(HeaderBailScriptOutput) != "override-fires" {
+		t.Fatalf("override did not fire: header=%q", hooked.Header.Get(HeaderBailScriptOutput))
 	}
 }
 

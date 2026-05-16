@@ -49,11 +49,11 @@ type ProxySetConfig struct {
 
 	// compiledBail holds the pre-compiled BailScript so we don't pay parse
 	// cost per request. Populated by LoadConfig.
-	compiledBail *utils.BailScript `toml:"-" yaml:"-" json:"-"`
+	compiledBail *BailScript `toml:"-" yaml:"-" json:"-"`
 }
 
 // CompiledBail returns the per-set default bail script, or nil if none.
-func (p *ProxySetConfig) CompiledBail() *utils.BailScript {
+func (p *ProxySetConfig) CompiledBail() *BailScript {
 	if p == nil {
 		return nil
 	}
@@ -88,7 +88,7 @@ func LoadConfig(path string) (*Config, error) {
 		if ps.BailScript == "" {
 			continue
 		}
-		s, cerr := utils.Compile("config:"+ps.Name, ps.BailScript)
+		s, cerr := Compile("config:"+ps.Name, ps.BailScript)
 		if cerr != nil {
 			return nil, fmt.Errorf("proxy_set %q bail_script: %w", ps.Name, cerr)
 		}

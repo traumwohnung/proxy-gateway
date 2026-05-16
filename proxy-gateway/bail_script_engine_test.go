@@ -1,4 +1,4 @@
-package utils
+package main
 
 import (
 	"bytes"
@@ -256,7 +256,7 @@ func TestApply_NoBail_DeliversFullBody(t *testing.T) {
 	if body := readAll(t, got.Body); body != "hello world" {
 		t.Fatalf("body=%q", body)
 	}
-	if got.Header.Get(HeaderBailReason) != "" {
+	if got.Header.Get(HeaderBailScriptOutput) != "" {
 		t.Fatalf("unexpected bail header")
 	}
 }
@@ -285,8 +285,8 @@ def bail(r):
 	if !closed {
 		t.Fatalf("upstream not closed")
 	}
-	if got.Header.Get(HeaderBailReason) != "datadome" {
-		t.Fatalf("X-Bail-Reason=%q", got.Header.Get(HeaderBailReason))
+	if got.Header.Get(HeaderBailScriptOutput) != "datadome" {
+		t.Fatalf("X-Bail-Reason=%q", got.Header.Get(HeaderBailScriptOutput))
 	}
 	// Body is what we received up to the bail point — at least the marker.
 	body := readAll(t, got.Body)
@@ -360,8 +360,8 @@ def bail(r):
 `
 	s, _ := Compile("late", src)
 	got := Apply(context.Background(), s, resp, 4096, 0)
-	if got.Header.Get(HeaderBailReason) != "datadome" {
-		t.Fatalf("expected later-chunk bail, header=%q", got.Header.Get(HeaderBailReason))
+	if got.Header.Get(HeaderBailScriptOutput) != "datadome" {
+		t.Fatalf("expected later-chunk bail, header=%q", got.Header.Get(HeaderBailScriptOutput))
 	}
 }
 
@@ -371,8 +371,8 @@ func TestApply_ReleaseCapWithoutDecision(t *testing.T) {
 	resp := makeResp(full)
 	s, _ := Compile("none", `def bail(r): return None`)
 	got := Apply(context.Background(), s, resp, 1024, 2048) // cap < body
-	if got.Header.Get(HeaderBailReason) != "" {
-		t.Fatalf("no bail expected, got %q", got.Header.Get(HeaderBailReason))
+	if got.Header.Get(HeaderBailScriptOutput) != "" {
+		t.Fatalf("no bail expected, got %q", got.Header.Get(HeaderBailScriptOutput))
 	}
 	// Should still deliver full body (buffered + remaining).
 	if body := readAll(t, got.Body); body != full {
