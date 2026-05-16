@@ -114,6 +114,65 @@ const migrations: Migration[] = [
       `;
     },
   },
+  {
+    version: 2,
+    description: 'rename session_params_hash → session_hash + intern session_meta into its own dim',
+    apply: async () => {
+      // Two related changes:
+      //
+      // 1. Hash rename. The hash is derived server-side from the canonical
+      //    session_params JSON; calling it "params_hash" no longer matches
+      //    the wire (which ships session_params, not a hash). The
+      //    session_params_dim PK stays named `hash` (it IS the session
+      //    hash; renaming the PK column is unnecessary churn).
+      //
+      // 2. session_meta gets its own dim table + hash space, mirroring
+      //    session_params_dim. Meta is free-form analytics enrichment that
+      //    can vary per request inside a session, so it can't piggyback
+      //    on session_params identity. Interning it lets repeated values
+      //    (tenant, campaign, etc.) dedupe at the storage layer; uniqueness
+      //    explosions degrade gracefully to ~1 dim row per connection.
+      //
+      // DuckDB refuses ALTER COLUMN while any index references the table,
+      // so drop the connection_closed indexes, do all the alters, then
+      // rebuild them.
+      await sql`DROP INDEX IF EXISTS cc_ts`;
+      await sql`DROP INDEX IF EXISTS cc_proxyset_ts`;
+      await sql`DROP INDEX IF EXISTS cc_session_hash_ts`;
+      await sql`DROP INDEX IF EXISTS cc_provider_ts`;
+      await sql`ALTER TABLE connection_closed RENAME COLUMN session_params_hash TO session_hash`;
+      // DuckDB doesn't support ALTER TABLE ADD COLUMN with constraints —
+      // column is nullable; the ingester writes '' (the empty-hash
+      // sentinel for "no meta supplied") so the column never contains
+      // NULL in practice.
+      await sql`ALTER TABLE connection_closed ADD COLUMN meta_hash TEXT`;
+      await sql`CREATE INDEX cc_ts              ON connection_closed(ts)`;
+      await sql`CREATE INDEX cc_proxyset_ts     ON connection_closed(proxyset, ts)`;
+      await sql`CREATE INDEX cc_session_hash_ts ON connection_closed(session_hash, ts)`;
+      await sql`CREATE INDEX cc_meta_hash_ts    ON connection_closed(meta_hash, ts)`;
+      await sql`CREATE INDEX cc_provider_ts     ON connection_closed(provider, ts)`;
+
+      await sql`DROP INDEX IF EXISTS epoch_ip_started`;
+      await sql`DROP INDEX IF EXISTS epoch_started_reason`;
+      await sql`ALTER TABLE session_epoch RENAME COLUMN session_params_hash TO session_hash`;
+      await sql`CREATE INDEX epoch_ip_started     ON session_epoch(upstream_ip, started_at)`;
+      await sql`CREATE INDEX epoch_started_reason ON session_epoch(started_at, start_reason)`;
+
+      // session_meta_dim — identity for distinct meta payloads. Same shape
+      // and PK semantics as session_params_dim. Lazy upsert: the meta_json
+      // column is nullable so a meta_hash referenced before its JSON is
+      // first seen (shouldn't happen for cc since the gateway always ships
+      // the JSON inline, but defensive) doesn't break extracts.
+      await sql`
+        CREATE TABLE session_meta_dim (
+          hash         TEXT PRIMARY KEY,
+          meta_json    JSON,
+          first_seen   BIGINT NOT NULL,
+          last_seen    BIGINT NOT NULL
+        )
+      `;
+    },
+  },
 ];
 
 // ---------------------------------------------------------------------------

@@ -12,12 +12,12 @@ import (
 func TestProxyConfiguration_Deterministic(t *testing.T) {
 	c1 := NewProxyConfiguration("residential").
 		Minutes(60).
-		Affinity("platform", "myapp").
-		Affinity("user", "alice")
+		SessionParams("platform", "myapp").
+		SessionParams("user", "alice")
 	c2 := NewProxyConfiguration("residential").
 		Minutes(60).
-		Affinity("user", "alice").
-		Affinity("platform", "myapp")
+		SessionParams("user", "alice").
+		SessionParams("platform", "myapp")
 
 	u1, err := c1.BuildUsername()
 	if err != nil {
@@ -52,7 +52,7 @@ func TestProxyConfiguration_BuildURL(t *testing.T) {
 	pc := NewProxyClient().Proxy("127.0.0.1", 8100)
 	c := NewProxyConfiguration("residential").
 		Minutes(60).
-		Affinity("user", "alice").
+		SessionParams("user", "alice").
 		WithProxyClient(pc)
 
 	url, err := c.BuildURL()

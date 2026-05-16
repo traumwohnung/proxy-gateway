@@ -1,12 +1,21 @@
 import { z } from "zod";
 
 /**
- * Flat JSON object that forms the session affinity key.
- * All values are strings.
+ * Flat JSON object that forms the session identity key. Two requests with
+ * the same set + same session_params share an upstream IP / session on the
+ * gateway. All values are strings.
  */
-export const affinityParamsSchema = z.record(z.string(), z.string());
+export const sessionParamsSchema = z.record(z.string(), z.string());
+export type SessionParams = Record<string, string>;
 
-export type AffinityParams = Record<string, string>;
+/**
+ * Flat JSON object carrying informational metadata. Does NOT affect session
+ * identity or IP selection — same session_params + different session_meta =
+ * same upstream IP. Carried through to the analytics service for filtering
+ * and grouping (tenant, campaign, request_id, …). All values are strings.
+ */
+export const sessionMetaSchema = z.record(z.string(), z.string());
+export type SessionMeta = Record<string, string>;
 
 export const sessionInfoSchema = z.object({
     /** Internal session ID, assigned at creation (starts at 0, increments per session). */
@@ -55,60 +64,6 @@ export const verifyResultSchema = z.object({
 export type VerifyResult = z.infer<typeof verifyResultSchema>;
 
 // ---------------------------------------------------------------------------
-// Usage query types
-// ---------------------------------------------------------------------------
-
-export const granularitySchema = z.enum(["hour", "day", "proxyset", "total"]);
-export type Granularity = z.infer<typeof granularitySchema>;
-
-export interface UsageFilter {
-    /** Filter by hour_ts >= from (ISO 8601, e.g. "2026-01-15T00:00:00Z"). */
-    from?: string;
-    /** Filter by hour_ts <= to (ISO 8601). */
-    to?: string;
-    /** Exact proxy set name filter. */
-    proxyset?: string;
-    /**
-     * JSONB containment filter on affinity_params.
-     * Pass a JSON object string, e.g. `{"user":"alice"}`.
-     * Matches any row whose affinity_params contains all the given key/values.
-     */
-    meta?: string;
-    /** Controls GROUP BY aggregation. Defaults to "hour". */
-    granularity?: Granularity;
-    /** 1-indexed page number. Defaults to 1. */
-    page?: number;
-    /** Rows per page. Defaults to 100, max 1000. */
-    pageSize?: number;
-}
-
-export const usageRowSchema = z.object({
-    /** Set when granularity="hour" (ISO 8601 UTC). */
-    hour_ts: z.string().optional(),
-    /** Set when granularity="day" (YYYY-MM-DD). */
-    day: z.string().optional(),
-    /** Set for granularity="hour", "day", "proxyset". */
-    proxyset: z.string().optional(),
-    /** Set for granularity="hour" — raw JSONB string. */
-    affinity_params: z.string().optional(),
-    upload_bytes: z.number().int().nonnegative(),
-    download_bytes: z.number().int().nonnegative(),
-    total_bytes: z.number().int().nonnegative(),
-});
-
-export type UsageRow = z.infer<typeof usageRowSchema>;
-
-export const usageResponseSchema = z.object({
-    rows: z.array(usageRowSchema),
-    total_count: z.number().int().nonnegative(),
-    page: z.number().int().positive(),
-    page_size: z.number().int().positive(),
-    total_pages: z.number().int().nonnegative(),
-});
-
-export type UsageResponse = z.infer<typeof usageResponseSchema>;
-
-// ---------------------------------------------------------------------------
 // HTTPCloak types
 // ---------------------------------------------------------------------------
 
@@ -140,8 +95,12 @@ export interface HTTPCloakSpec {
 
 export interface BuildProxyUsernameOptions {
     proxySet: string;
-    affinityMinutes: number;
-    affinity: AffinityParams;
+    /** Session duration (0 = new proxy per request, 1–1440 = sticky). */
+    minutes: number;
+    /** Session identity. Same set + same sessionParams = same upstream IP. */
+    sessionParams: SessionParams;
+    /** Informational metadata. Does NOT affect IP selection. */
+    sessionMeta?: SessionMeta;
     /** Enable TLS fingerprint spoofing. */
     httpcloak?: HTTPCloakSpec;
 }
@@ -152,18 +111,34 @@ export interface BuildProxyUsernameOptions {
  * to also verify that the proxy set exists and the upstream is reachable.
  *
  * @example
- * // Without httpcloak
- * buildProxyUsername({ proxySet: "residential", affinityMinutes: 60, affinity: { platform: "ka" } })
+ * // Identity only — same upstream IP for all calls with these params
+ * buildProxyUsername({ proxySet: "residential", minutes: 60, sessionParams: { user: "alice" } })
+ *
+ * // With informational meta for analytics — same IP as above
+ * buildProxyUsername({
+ *   proxySet: "residential",
+ *   minutes: 60,
+ *   sessionParams: { user: "alice" },
+ *   sessionMeta: { tenant: "acme", campaign: "spring" },
+ * })
  *
  * // With httpcloak
- * buildProxyUsername({ proxySet: "direct", affinityMinutes: 0, affinity: {}, httpcloak: { preset: "chrome-latest", user_agent: "preset" } })
+ * buildProxyUsername({
+ *   proxySet: "direct",
+ *   minutes: 0,
+ *   sessionParams: {},
+ *   httpcloak: { preset: "chrome-latest", user_agent: "preset" },
+ * })
  */
 export function buildProxyUsername(opts: BuildProxyUsernameOptions): string {
     const payload: Record<string, unknown> = {
         set: opts.proxySet,
-        minutes: opts.affinityMinutes,
-        affinity: opts.affinity,
+        minutes: opts.minutes,
+        session_params: opts.sessionParams,
     };
+    if (opts.sessionMeta !== undefined && Object.keys(opts.sessionMeta).length > 0) {
+        payload.session_meta = opts.sessionMeta;
+    }
     if (opts.httpcloak !== undefined) {
         payload.httpcloak = opts.httpcloak;
     }
@@ -177,8 +152,9 @@ export function buildProxyUsername(opts: BuildProxyUsernameOptions): string {
  */
 export function parseProxyUsername(username: string): {
     proxySet: string;
-    affinityMinutes: number;
-    affinity: AffinityParams;
+    minutes: number;
+    sessionParams: SessionParams;
+    sessionMeta?: SessionMeta;
     httpcloak?: HTTPCloakSpec;
 } | null {
     try {
@@ -186,29 +162,35 @@ export function parseProxyUsername(username: string): {
         const obj = JSON.parse(json);
         if (typeof obj !== "object" || obj === null) return null;
 
-        const { set, minutes, affinity, httpcloak } = obj;
+        const { set, minutes, session_params: sessionParams, session_meta: sessionMeta, httpcloak } = obj;
         if (
             typeof set !== "string" ||
             typeof minutes !== "number" ||
-            typeof affinity !== "object" ||
-            affinity === null
+            typeof sessionParams !== "object" ||
+            sessionParams === null
         ) {
             return null;
         }
 
-        const affinityResult = affinityParamsSchema.safeParse(affinity);
-        if (!affinityResult.success) return null;
+        const paramsResult = sessionParamsSchema.safeParse(sessionParams);
+        if (!paramsResult.success) return null;
 
         const result: {
             proxySet: string;
-            affinityMinutes: number;
-            affinity: AffinityParams;
+            minutes: number;
+            sessionParams: SessionParams;
+            sessionMeta?: SessionMeta;
             httpcloak?: HTTPCloakSpec;
         } = {
             proxySet: set,
-            affinityMinutes: minutes,
-            affinity: affinityResult.data,
+            minutes,
+            sessionParams: paramsResult.data,
         };
+        if (sessionMeta !== undefined && sessionMeta !== null) {
+            const metaResult = sessionMetaSchema.safeParse(sessionMeta);
+            if (!metaResult.success) return null;
+            result.sessionMeta = metaResult.data;
+        }
         if (httpcloak !== undefined) {
             result.httpcloak = httpcloak;
         }

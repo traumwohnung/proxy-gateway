@@ -1,5 +1,5 @@
 import { ProxyClient } from "./proxy_client";
-import type { AffinityParams, HTTPCloakSpec, SessionInfo } from "./types";
+import type { HTTPCloakSpec, SessionInfo, SessionMeta, SessionParams } from "./types";
 
 /**
  * Fluent builder for a single proxy-gateway proxy configuration. From it
@@ -19,26 +19,28 @@ export class ProxyConfiguration {
     private params: {
         set: string;
         minutes: number;
-        affinity: AffinityParams;
+        sessionParams: SessionParams;
+        sessionMeta: SessionMeta;
         httpcloak?: HTTPCloakSpec;
     };
     private client: ProxyClient | null = null;
 
     constructor(set: string) {
-        this.params = { set, minutes: 0, affinity: {} };
+        this.params = { set, minutes: 0, sessionParams: {}, sessionMeta: {} };
     }
 
     /**
-     * Returns a deep copy of this configuration. The affinity map is copied
-     * so further mutations on the clone do not affect the original. The bound
-     * `ProxyClient` reference is shared.
+     * Returns a deep copy of this configuration. The session_params and
+     * session_meta maps are copied so further mutations on the clone do not
+     * affect the original. The bound `ProxyClient` reference is shared.
      */
     clone(): ProxyConfiguration {
         const cp = new ProxyConfiguration(this.params.set);
         cp.params = {
             set: this.params.set,
             minutes: this.params.minutes,
-            affinity: { ...this.params.affinity },
+            sessionParams: { ...this.params.sessionParams },
+            sessionMeta: { ...this.params.sessionMeta },
             httpcloak: this.params.httpcloak,
         };
         cp.client = this.client;
@@ -50,8 +52,22 @@ export class ProxyConfiguration {
         return this;
     }
 
-    affinity(key: string, value: string): this {
-        this.params.affinity[key] = value;
+    /**
+     * Add a key/value to session_params. Two configurations with the same
+     * set + same session_params share an upstream IP on the gateway.
+     */
+    sessionParams(key: string, value: string): this {
+        this.params.sessionParams[key] = value;
+        return this;
+    }
+
+    /**
+     * Add a key/value to session_meta. Informational only — never affects
+     * session identity or IP selection; carried through to the analytics
+     * service for filtering/grouping.
+     */
+    sessionMeta(key: string, value: string): this {
+        this.params.sessionMeta[key] = value;
         return this;
     }
 
@@ -73,8 +89,11 @@ export class ProxyConfiguration {
         const payload: Record<string, unknown> = {
             set: this.params.set,
             minutes: this.params.minutes,
-            affinity: this.params.affinity,
+            session_params: this.params.sessionParams,
         };
+        if (Object.keys(this.params.sessionMeta).length > 0) {
+            payload.session_meta = this.params.sessionMeta;
+        }
         if (this.params.httpcloak !== undefined) {
             payload.httpcloak = this.params.httpcloak;
         }

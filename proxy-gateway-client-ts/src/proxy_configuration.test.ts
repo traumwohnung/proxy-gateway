@@ -2,7 +2,12 @@ import { describe, expect, it } from "bun:test";
 import { ProxyClient } from "./proxy_client";
 import { ProxyConfiguration } from "./proxy_configuration";
 
-function decode(username: string): { set: string; minutes: number; affinity: Record<string, string> } {
+function decode(username: string): {
+    set: string;
+    minutes: number;
+    session_params: Record<string, string>;
+    session_meta?: Record<string, string>;
+} {
     return JSON.parse(atob(username));
 }
 
@@ -10,18 +15,18 @@ describe("ProxyConfiguration", () => {
     it("encodes the configured fields", () => {
         const u = new ProxyConfiguration("residential")
             .minutes(60)
-            .affinity("platform", "myapp")
-            .affinity("user", "alice")
+            .sessionParams("platform", "myapp")
+            .sessionParams("user", "alice")
             .buildUsername();
         const decoded = decode(u);
         expect(decoded.set).toBe("residential");
         expect(decoded.minutes).toBe(60);
-        expect(decoded.affinity).toEqual({ platform: "myapp", user: "alice" });
+        expect(decoded.session_params).toEqual({ platform: "myapp", user: "alice" });
     });
 
     it("is deterministic — same inputs produce identical usernames", () => {
-        const a = new ProxyConfiguration("residential").minutes(60).affinity("user", "alice").buildUsername();
-        const b = new ProxyConfiguration("residential").minutes(60).affinity("user", "alice").buildUsername();
+        const a = new ProxyConfiguration("residential").minutes(60).sessionParams("user", "alice").buildUsername();
+        const b = new ProxyConfiguration("residential").minutes(60).sessionParams("user", "alice").buildUsername();
         expect(a).toBe(b);
     });
 
@@ -68,9 +73,7 @@ describe("ProxyConfiguration", () => {
             },
         });
 
-        const pc = new ProxyClient()
-            .proxy("127.0.0.1", 8100)
-            .admin(`http://localhost:${srv.port}`, "");
+        const pc = new ProxyClient().proxy("127.0.0.1", 8100).admin(`http://localhost:${srv.port}`, "");
         const c = new ProxyConfiguration("set").minutes(60).withProxyClient(pc);
 
         const info = await c.rotate();
@@ -97,9 +100,7 @@ describe("ProxyConfiguration", () => {
                     { headers: { "Content-Type": "application/json" } },
                 ),
         });
-        const pc = new ProxyClient()
-            .proxy("127.0.0.1", 8100)
-            .admin(`http://localhost:${srv.port}`, "");
+        const pc = new ProxyClient().proxy("127.0.0.1", 8100).admin(`http://localhost:${srv.port}`, "");
         const c = new ProxyConfiguration("set").minutes(60).withProxyClient(pc);
 
         let calls = 0;

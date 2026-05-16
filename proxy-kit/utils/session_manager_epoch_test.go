@@ -45,11 +45,10 @@ func (s *ipRollingSource) Resolve(_ context.Context, _ *proxykit.Request) (*prox
 	return proxykit.Resolved(&proxykit.Proxy{Host: ip, Port: 8080}), nil
 }
 
-func ctxWithSession(hash, params, proxyset string, ttl time.Duration, seed uint64) context.Context {
+func ctxWithSession(params, proxyset string, ttl time.Duration, seed uint64) context.Context {
 	ctx := context.Background()
 	ctx = WithTopLevelSeed(ctx, seed)
 	ctx = WithSeedTTL(ctx, ttl)
-	ctx = WithSessionParamsHash(ctx, hash)
 	ctx = WithSessionParamsJSON(ctx, params)
 	ctx = WithProxysetName(ctx, proxyset)
 	return ctx
@@ -60,7 +59,7 @@ func TestEpochListener_FirstBindEmitsZeroEpoch(t *testing.T) {
 	rec := &recordingListener{}
 	sm := NewSessionManagerWithListener(src, rec)
 
-	ctx := ctxWithSession("hashA", `{"u":"alice"}`, "residential", time.Minute, 12345)
+	ctx := ctxWithSession(`{"u":"alice"}`, "residential", time.Minute, 12345)
 	if _, err := sm.Resolve(ctx, &proxykit.Request{}); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -79,8 +78,8 @@ func TestEpochListener_FirstBindEmitsZeroEpoch(t *testing.T) {
 	if ev.NewIP != "10.0.0.1" || ev.PrevIP != "" {
 		t.Errorf("ips: want new=10.0.0.1 prev=empty, got new=%q prev=%q", ev.NewIP, ev.PrevIP)
 	}
-	if ev.SessionParamsHash != "hashA" || ev.ParamsJSON != `{"u":"alice"}` {
-		t.Errorf("identity: hash=%q params=%q", ev.SessionParamsHash, ev.ParamsJSON)
+	if ev.SessionParams != `{"u":"alice"}` {
+		t.Errorf("session_params: want %q, got %q", `{"u":"alice"}`, ev.SessionParams)
 	}
 }
 
@@ -89,7 +88,7 @@ func TestEpochListener_RotateNowEmitsForcedAndBumpsEpoch(t *testing.T) {
 	rec := &recordingListener{}
 	sm := NewSessionManagerWithListener(src, rec)
 
-	ctx := ctxWithSession("hashA", `{"u":"alice"}`, "residential", time.Minute, 7777)
+	ctx := ctxWithSession(`{"u":"alice"}`, "residential", time.Minute, 7777)
 	if _, err := sm.Resolve(ctx, &proxykit.Request{}); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -113,9 +112,10 @@ func TestEpochListener_RotateNowEmitsForcedAndBumpsEpoch(t *testing.T) {
 	if rot.PrevIP != "10.0.0.1" || rot.NewIP != "10.0.0.2" {
 		t.Errorf("ips: want prev=10.0.0.1 new=10.0.0.2, got prev=%q new=%q", rot.PrevIP, rot.NewIP)
 	}
-	// ParamsJSON should NOT be re-sent on rotations (only first_bind carries it).
-	if rot.ParamsJSON != "" {
-		t.Errorf("params_json should be empty on non-first_bind, got %q", rot.ParamsJSON)
+	// SessionParams rides on every event now (gateway is hash-free; the
+	// canonical JSON is the only identity the analytics side ever sees).
+	if rot.SessionParams != `{"u":"alice"}` {
+		t.Errorf("session_params on rotation: want %q, got %q", `{"u":"alice"}`, rot.SessionParams)
 	}
 	if info.Epoch != 1 {
 		t.Errorf("SessionInfo.Epoch: want 1, got %d", info.Epoch)
@@ -128,7 +128,7 @@ func TestEpochListener_TTLEvictThenResolveEmitsTTLReason(t *testing.T) {
 	sm := NewSessionManagerWithListener(src, rec)
 
 	// First resolve creates the entry.
-	ctx := ctxWithSession("hashA", `{"u":"alice"}`, "residential", time.Millisecond, 4242)
+	ctx := ctxWithSession(`{"u":"alice"}`, "residential", time.Millisecond, 4242)
 	if _, err := sm.Resolve(ctx, &proxykit.Request{}); err != nil {
 		t.Fatalf("resolve1: %v", err)
 	}
@@ -162,12 +162,14 @@ func TestEpochListener_TTLEvictThenResolveEmitsTTLReason(t *testing.T) {
 	}
 }
 
-func TestEpochListener_NoEmissionWithoutHash(t *testing.T) {
+func TestEpochListener_EmitsEvenWithoutSessionParamsJSON(t *testing.T) {
 	src := &ipRollingSource{ips: []string{"10.0.0.1"}}
 	rec := &recordingListener{}
 	sm := NewSessionManagerWithListener(src, rec)
 
-	// No WithSessionParamsHash → no analytics emission.
+	// No WithSessionParamsJSON → event still emits, just with empty
+	// SessionParams. The session manager now keys epoch tracking by
+	// top-level seed; it has no notion of "hash present" gating.
 	ctx := context.Background()
 	ctx = WithTopLevelSeed(ctx, 9999)
 	ctx = WithSeedTTL(ctx, time.Minute)
@@ -175,7 +177,11 @@ func TestEpochListener_NoEmissionWithoutHash(t *testing.T) {
 	if _, err := sm.Resolve(ctx, &proxykit.Request{}); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if len(rec.snapshot()) != 0 {
-		t.Fatalf("expected no events when hash is empty, got %d", len(rec.snapshot()))
+	evs := rec.snapshot()
+	if len(evs) != 1 {
+		t.Fatalf("want 1 event, got %d", len(evs))
+	}
+	if evs[0].SessionParams != "" {
+		t.Errorf("session_params should be empty when not set, got %q", evs[0].SessionParams)
 	}
 }

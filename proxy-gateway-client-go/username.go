@@ -11,10 +11,18 @@ import (
 type UsernameParams struct {
 	// Set is the proxy set name — must match a [[proxy_set]] name in the server config.
 	Set string `json:"set"`
-	// Minutes is the affinity duration (0 = new proxy every request, 1–1440 = sticky session).
+	// Minutes is the session duration (0 = new proxy every request, 1–1440 = sticky session).
 	Minutes int `json:"minutes"`
-	// Affinity is an arbitrary key/value map that, together with Set, forms the session affinity key.
-	Affinity map[string]any `json:"affinity,omitempty"`
+	// SessionParams is an arbitrary key/value map that, together with Set, forms
+	// the session identity key. Changing SessionParams creates a new session
+	// (different upstream IP). Use it for fields that should partition traffic
+	// into distinct sessions (e.g. per-user, per-region).
+	SessionParams map[string]any `json:"session_params,omitempty"`
+	// SessionMeta is arbitrary informational metadata attached to each request.
+	// It does NOT influence session identity or IP selection — same SessionParams
+	// + different SessionMeta = same upstream IP. Carried through to the
+	// analytics service for filtering/grouping (tenant, campaign, request_id, …).
+	SessionMeta map[string]any `json:"session_meta,omitempty"`
 	// HTTPCloak enables TLS fingerprint spoofing via MITM. When set, the
 	// proxy-gateway intercepts the TLS connection and re-establishes it with
 	// a browser-like fingerprint.
@@ -42,9 +50,10 @@ type HTTPCloakSpec struct {
 // The returned string is used as the Proxy-Authorization username; the password is always "x".
 //
 //	username := proxygatewayclient.BuildUsername(proxygatewayclient.UsernameParams{
-//	    Set:     "residential",
-//	    Minutes: 60,
-//	    Meta:    map[string]any{"platform": "myapp", "user": "alice"},
+//	    Set:           "residential",
+//	    Minutes:       60,
+//	    SessionParams: map[string]any{"user": "alice"},
+//	    SessionMeta:   map[string]any{"tenant": "acme", "campaign": "spring"},
 //	})
 func BuildUsername(p UsernameParams) (string, error) {
 	if p.Set == "" {

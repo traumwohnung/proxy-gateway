@@ -13,14 +13,15 @@ import (
 
 // Username is the parsed proxy-gateway username JSON.
 //
-//	{"set":"residential", "minutes":5, "affinity":{"platform":"myapp","user":"alice"}}
+//	{"set":"residential", "minutes":5, "session_params":{"platform":"myapp","user":"alice"}}
 //	{"set":"direct", "httpcloak":{"preset":"chrome-latest"}}
 //	{"set":"direct", "httpcloak":{"preset":"chrome-latest","ja3":"771,...","akamai":"1:65536|..."}}
 type Username struct {
-	Affinity  AffinityParams
-	Minutes   int
-	Httpcloak *utils.HTTPCloakSpec // optional; triggers MITM + TLS fingerprint spoofing
-	Raw       string               // original JSON string, stored as session label
+	SessionParams SessionParams
+	Minutes       int
+	Httpcloak     *utils.HTTPCloakSpec   // optional; triggers MITM + TLS fingerprint spoofing
+	SessionMeta   map[string]interface{} // optional; informational only — never affects session/IP
+	Raw           string                 // original JSON string, stored as session label
 }
 
 // ParseUsername parses a raw JSON username string.
@@ -38,10 +39,11 @@ func ParseUsername(raw string) (*Username, error) {
 		jsonBytes = decoded
 	}
 	var j struct {
-		Set      string                 `json:"set"`
-		Minutes  int                    `json:"minutes"`
-		Affinity map[string]interface{} `json:"affinity"`
-		Httpcloak json.RawMessage       `json:"httpcloak"`
+		Set           string                 `json:"set"`
+		Minutes       int                    `json:"minutes"`
+		SessionParams map[string]interface{} `json:"session_params"`
+		SessionMeta   map[string]interface{} `json:"session_meta"`
+		Httpcloak     json.RawMessage        `json:"httpcloak"`
 	}
 	if err := json.Unmarshal(jsonBytes, &j); err != nil {
 		return nil, fmt.Errorf("username is not valid JSON: %w", err)
@@ -54,10 +56,11 @@ func ParseUsername(raw string) (*Username, error) {
 		return nil, fmt.Errorf("httpcloak: %w", err)
 	}
 	return &Username{
-		Affinity:  AffinityParams{Set: j.Set, Meta: j.Affinity},
-		Minutes:   j.Minutes,
-		Httpcloak: spec,
-		Raw:       string(jsonBytes),
+		SessionParams: SessionParams{Set: j.Set, Meta: j.SessionParams},
+		Minutes:       j.Minutes,
+		Httpcloak:     spec,
+		SessionMeta:   j.SessionMeta,
+		Raw:           string(jsonBytes),
 	}, nil
 }
 
@@ -71,14 +74,15 @@ const (
 	ctxSet ctxKey = iota
 	ctxHTTPCloakPreset
 	ctxMinutes
+	ctxSessionMetaJSON
 )
 
-// Note: session_params_hash, canonical session params JSON, and provider name
-// all live on the utils-side context (proxy-kit/utils) because the
-// SessionManager and downstream proxy-kit middleware need to read them
-// without a dependency on the gateway package. The gateway sets them in
-// ParseJSONCreds / buildProxysetRouter and reads them back via the
-// utils.Get* accessors. Don't add a gateway-side duplicate.
+// Note: the canonical session params JSON and provider name live on the
+// utils-side context (proxy-kit/utils) because the SessionManager and
+// downstream proxy-kit middleware need to read them without a dependency on
+// the gateway package. The gateway sets them in ParseJSONCreds /
+// buildProxysetRouter and reads them back via the utils.Get* accessors.
+// Don't add a gateway-side duplicate.
 
 func withMinutes(ctx context.Context, m int) context.Context {
 	return context.WithValue(ctx, ctxMinutes, m)
@@ -95,6 +99,20 @@ func withSet(ctx context.Context, set string) context.Context {
 
 func getSet(ctx context.Context) string {
 	v, _ := ctx.Value(ctxSet).(string)
+	return v
+}
+
+// session_meta is informational metadata carried alongside the request for
+// analytics enrichment only. Unlike session_params it MUST NOT influence the
+// session seed or proxy/IP selection — kept on the gateway-local context to
+// guarantee it never reaches proxy-kit's session machinery. Stored per
+// session on the analytics side keyed by session_hash.
+func withSessionMetaJSON(ctx context.Context, canonicalJSON string) context.Context {
+	return context.WithValue(ctx, ctxSessionMetaJSON, canonicalJSON)
+}
+
+func getSessionMetaJSON(ctx context.Context) string {
+	v, _ := ctx.Value(ctxSessionMetaJSON).(string)
 	return v
 }
 
@@ -123,17 +141,19 @@ func ParseJSONCreds(next proxykit.Handler) proxykit.Handler {
 			return nil, err
 		}
 
-		ctx = withSet(ctx, u.Affinity.Set)
+		ctx = withSet(ctx, u.SessionParams.Set)
 		ctx = withMinutes(ctx, u.Minutes)
 		ctx = utils.WithSeedTTL(ctx, time.Duration(u.Minutes)*time.Minute)
-		ctx = utils.WithTopLevelSeed(ctx, u.Affinity.Seed())
+		ctx = utils.WithTopLevelSeed(ctx, u.SessionParams.Seed())
 		ctx = utils.WithSessionLabel(ctx, u.Raw)
 		// Analytics fields live on the utils-side context so SessionManager
 		// (in proxy-kit) and trackUsage (in this package) both read them
-		// from a single source of truth.
-		ctx = utils.WithSessionParamsHash(ctx, u.Affinity.Hash())
-		ctx = utils.WithSessionParamsJSON(ctx, u.Affinity.CanonicalJSON())
-		ctx = utils.WithProxysetName(ctx, u.Affinity.Set)
+		// from a single source of truth. The gateway is hash-free: it
+		// ships canonical JSON only; the analytics service derives any
+		// hash it needs.
+		ctx = utils.WithSessionParamsJSON(ctx, u.SessionParams.CanonicalJSON())
+		ctx = utils.WithProxysetName(ctx, u.SessionParams.Set)
+		ctx = withSessionMetaJSON(ctx, MetaCanonicalJSON(u.SessionMeta))
 		ctx = withHTTPCloakSpec(ctx, u.Httpcloak)
 
 		return next.Resolve(ctx, req)

@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file ingest/v1/ingest.proto.
  */
 export const file_ingest_v1_ingest: GenFile = /*@__PURE__*/
-  fileDesc("ChZpbmdlc3QvdjEvaW5nZXN0LnByb3RvEglpbmdlc3QudjEinAIKBUV2ZW50EiYKAnRzGAEgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIQCghldmVudF9pZBgCIAEoCRI4ChFjb25uZWN0aW9uX2Nsb3NlZBgKIAEoCzIbLmluZ2VzdC52MS5Db25uZWN0aW9uQ2xvc2VkSAASNgoQZXBvY2hfdHJhbnNpdGlvbhgLIAEoCzIaLmluZ2VzdC52MS5FcG9jaFRyYW5zaXRpb25IABIsCgtkcm9wX3JlcG9ydBgMIAEoCzIVLmluZ2VzdC52MS5Ecm9wUmVwb3J0SAASLgoMbWl0bV9yZXF1ZXN0GA0gASgLMhYuaW5nZXN0LnYxLk1pdG1SZXF1ZXN0SABCCQoHcGF5bG9hZCKWAgoQQ29ubmVjdGlvbkNsb3NlZBIVCg1jb25uZWN0aW9uX2lkGAEgASgJEhAKCHByb3h5c2V0GAIgASgJEhAKCHByb3ZpZGVyGAMgASgJEhsKE3Nlc3Npb25fcGFyYW1zX2hhc2gYBCABKAkSIAoYc2Vzc2lvbl9kdXJhdGlvbl9taW51dGVzGAUgASgFEg0KBWVwb2NoGAYgASgFEhMKC3Vwc3RyZWFtX2lwGAcgASgJEgsKA3NuaRgIIAEoCRIUCgxjbG9zZV9yZWFzb24YCSABKAkSFAoMdXBsb2FkX2J5dGVzGAogASgDEhYKDmRvd25sb2FkX2J5dGVzGAsgASgDEhMKC2R1cmF0aW9uX21zGAwgASgDIsUBCg9FcG9jaFRyYW5zaXRpb24SGwoTc2Vzc2lvbl9wYXJhbXNfaGFzaBgBIAEoCRITCgtwYXJhbXNfanNvbhgCIAEoCRIQCghwcm94eXNldBgDIAEoCRIQCghwcm92aWRlchgEIAEoCRISCgpwcmV2X2Vwb2NoGAUgASgFEhEKCW5ld19lcG9jaBgGIAEoBRIPCgdwcmV2X2lwGAcgASgJEg4KBm5ld19pcBgIIAEoCRIUCgxzdGFydF9yZWFzb24YCSABKAkihgEKCkRyb3BSZXBvcnQSFgoOZHJvcHBlZF9ldmVudHMYASABKAMSMAoMd2luZG93X3N0YXJ0GAIgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgp3aW5kb3dfZW5kGAMgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCINCgtNaXRtUmVxdWVzdCIdCglSZWNvcmRBY2sSEAoIYWNjZXB0ZWQYASABKAQyRAoGSW5nZXN0EjoKDFJlY29yZEV2ZW50cxIQLmluZ2VzdC52MS5FdmVudBoULmluZ2VzdC52MS5SZWNvcmRBY2siACgBQjBaLnByb3h5LWdhdGV3YXkvYW5hbHl0aWNzL2dlbi9pbmdlc3QvdjE7aW5nZXN0djFiBnByb3RvMw", [file_google_protobuf_timestamp]);
+  fileDesc("ChZpbmdlc3QvdjEvaW5nZXN0LnByb3RvEglpbmdlc3QudjEinAIKBUV2ZW50EiYKAnRzGAEgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIQCghldmVudF9pZBgCIAEoCRI4ChFjb25uZWN0aW9uX2Nsb3NlZBgKIAEoCzIbLmluZ2VzdC52MS5Db25uZWN0aW9uQ2xvc2VkSAASNgoQZXBvY2hfdHJhbnNpdGlvbhgLIAEoCzIaLmluZ2VzdC52MS5FcG9jaFRyYW5zaXRpb25IABIsCgtkcm9wX3JlcG9ydBgMIAEoCzIVLmluZ2VzdC52MS5Ecm9wUmVwb3J0SAASLgoMbWl0bV9yZXF1ZXN0GA0gASgLMhYuaW5nZXN0LnYxLk1pdG1SZXF1ZXN0SABCCQoHcGF5bG9hZCKnAgoQQ29ubmVjdGlvbkNsb3NlZBIVCg1jb25uZWN0aW9uX2lkGAEgASgJEhAKCHByb3h5c2V0GAIgASgJEhAKCHByb3ZpZGVyGAMgASgJEhYKDnNlc3Npb25fcGFyYW1zGAQgASgJEiAKGHNlc3Npb25fZHVyYXRpb25fbWludXRlcxgFIAEoBRINCgVlcG9jaBgGIAEoBRITCgt1cHN0cmVhbV9pcBgHIAEoCRILCgNzbmkYCCABKAkSFAoMY2xvc2VfcmVhc29uGAkgASgJEhQKDHVwbG9hZF9ieXRlcxgKIAEoAxIWCg5kb3dubG9hZF9ieXRlcxgLIAEoAxITCgtkdXJhdGlvbl9tcxgMIAEoAxIUCgxzZXNzaW9uX21ldGEYDSABKAkivgEKD0Vwb2NoVHJhbnNpdGlvbhIWCg5zZXNzaW9uX3BhcmFtcxgBIAEoCRIQCghwcm94eXNldBgDIAEoCRIQCghwcm92aWRlchgEIAEoCRISCgpwcmV2X2Vwb2NoGAUgASgFEhEKCW5ld19lcG9jaBgGIAEoBRIPCgdwcmV2X2lwGAcgASgJEg4KBm5ld19pcBgIIAEoCRIUCgxzdGFydF9yZWFzb24YCSABKAlKBAgCEANSC3BhcmFtc19qc29uIoYBCgpEcm9wUmVwb3J0EhYKDmRyb3BwZWRfZXZlbnRzGAEgASgDEjAKDHdpbmRvd19zdGFydBgCIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLgoKd2luZG93X2VuZBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiDQoLTWl0bVJlcXVlc3QiHQoJUmVjb3JkQWNrEhAKCGFjY2VwdGVkGAEgASgEMkQKBkluZ2VzdBI6CgxSZWNvcmRFdmVudHMSEC5pbmdlc3QudjEuRXZlbnQaFC5pbmdlc3QudjEuUmVjb3JkQWNrIgAoAUIwWi5wcm94eS1nYXRld2F5L2FuYWx5dGljcy9nZW4vaW5nZXN0L3YxO2luZ2VzdHYxYgZwcm90bzM", [file_google_protobuf_timestamp]);
 
 /**
  * @generated from message ingest.v1.Event
@@ -93,13 +93,13 @@ export type ConnectionClosed = Message<"ingest.v1.ConnectionClosed"> & {
   provider: string;
 
   /**
-   * First 16 bytes of SHA-256 over the canonical JSON of the session params,
-   * lowercase hex (32 chars). Canonical form: keys sorted, no whitespace,
-   * numbers in their natural JSON form. The gateway computes this locally.
+   * Canonical JSON of the session params (sorted keys, no whitespace).
+   * Drives session identity / IP selection. The analytics server derives
+   * session_hash = sha256[:16] of this string for joins.
    *
-   * @generated from field: string session_params_hash = 4;
+   * @generated from field: string session_params = 4;
    */
-  sessionParamsHash: string;
+  sessionParams: string;
 
   /**
    * @generated from field: int32 session_duration_minutes = 5;
@@ -144,6 +144,17 @@ export type ConnectionClosed = Message<"ingest.v1.ConnectionClosed"> & {
    * @generated from field: int64 duration_ms = 12;
    */
   durationMs: bigint;
+
+  /**
+   * session_meta is a free-form JSON map supplied by the client purely for
+   * analytics enrichment — it does NOT influence session identity or IP
+   * selection. Canonical (sorted-keys) JSON, "{}" when none was supplied.
+   * Stored as a column on session_params_dim keyed by session_hash
+   * (last-write-wins; same session, different meta values just overwrite).
+   *
+   * @generated from field: string session_meta = 13;
+   */
+  sessionMeta: string;
 };
 
 /**
@@ -162,18 +173,13 @@ export const ConnectionClosedSchema: GenMessage<ConnectionClosed> = /*@__PURE__*
  */
 export type EpochTransition = Message<"ingest.v1.EpochTransition"> & {
   /**
-   * @generated from field: string session_params_hash = 1;
-   */
-  sessionParamsHash: string;
-
-  /**
-   * Canonical JSON of the session params. Populated on first_bind so the
-   * ingest server can backfill session_params_dim.params_json. May be empty
-   * on subsequent transitions.
+   * Canonical JSON of the session params (sorted keys, no whitespace).
+   * The analytics server derives session_hash = sha256[:16] of this string
+   * for joins. Always populated.
    *
-   * @generated from field: string params_json = 2;
+   * @generated from field: string session_params = 1;
    */
-  paramsJson: string;
+  sessionParams: string;
 
   /**
    * @generated from field: string proxyset = 3;

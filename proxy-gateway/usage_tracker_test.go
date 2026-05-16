@@ -77,12 +77,12 @@ func TestUsageTracker_RecordSkipsZeroBytes(t *testing.T) {
 func TestUsageConnTracker_CloseEmitsOneEvent(t *testing.T) {
 	r := &recorder{}
 	rec := connRecord{
-		connectionID:      "conn-1",
-		proxyset:          "datacenter",
-		sessionParamsHash: "deadbeef",
-		minutes:           60,
-		upstreamIP:        "1.2.3.4",
-		startedAt:         time.Now().Add(-100 * time.Millisecond).UTC(),
+		connectionID:  "conn-1",
+		proxyset:      "datacenter",
+		sessionParams: `{"u":"alice"}`,
+		minutes:       60,
+		upstreamIP:    "1.2.3.4",
+		startedAt:     time.Now().Add(-100 * time.Millisecond).UTC(),
 	}
 	ct := &captureConnTracker{t: &captureTracker{r: r}, rec: rec}
 	ct.Close(1024, 4096, "ok")
@@ -92,7 +92,7 @@ func TestUsageConnTracker_CloseEmitsOneEvent(t *testing.T) {
 		t.Fatalf("want 1 close, got %d", len(got))
 	}
 	c := got[0]
-	if c.rec.proxyset != "datacenter" || c.rec.sessionParamsHash != "deadbeef" ||
+	if c.rec.proxyset != "datacenter" || c.rec.sessionParams != `{"u":"alice"}` ||
 		c.rec.minutes != 60 || c.upload != 1024 || c.download != 4096 ||
 		c.rec.upstreamIP != "1.2.3.4" || c.rec.connectionID != "conn-1" || c.reason != "ok" {
 		t.Errorf("record mismatch: %+v upload=%d download=%d reason=%q", c.rec, c.upload, c.download, c.reason)
@@ -142,8 +142,8 @@ func TestTrackUsageMiddleware_AttachesConnTrackerWithHash(t *testing.T) {
 	if ct.rec.proxyset != "residential" {
 		t.Errorf("want proxyset=residential, got %q", ct.rec.proxyset)
 	}
-	if ct.rec.sessionParamsHash == "" {
-		t.Error("session_params_hash should be non-empty when affinity meta is set")
+	if ct.rec.sessionParams == "" || ct.rec.sessionParams == "{}" {
+		t.Errorf("session_params should be non-empty when meta is set, got %q", ct.rec.sessionParams)
 	}
 	if ct.rec.connectionID == "" {
 		t.Error("connection_id should be non-empty")
@@ -173,7 +173,7 @@ func testProxyRequest(set, meta string) *proxykit.Request {
 	if meta == "" {
 		username = fmt.Sprintf(`{"set":%q,"minutes":5}`, set)
 	} else {
-		username = fmt.Sprintf(`{"set":%q,"minutes":5,"affinity":%s}`, set, meta)
+		username = fmt.Sprintf(`{"set":%q,"minutes":5,"session_params":%s}`, set, meta)
 	}
 	return &proxykit.Request{RawUsername: username}
 }

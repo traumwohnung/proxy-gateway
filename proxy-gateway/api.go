@@ -36,9 +36,9 @@ func toAPISessionInfo(info *utils.SessionInfo) *apiSessionInfo {
 	set := ""
 	meta := map[string]interface{}{}
 	if u != nil {
-		set = u.Affinity.Set
-		if u.Affinity.Meta != nil {
-			meta = u.Affinity.Meta
+		set = u.SessionParams.Set
+		if u.SessionParams.Meta != nil {
+			meta = u.SessionParams.Meta
 		}
 	}
 
@@ -98,7 +98,7 @@ func handleGetSession(sessions *utils.SessionManager) http.HandlerFunc {
 			writeJSON(w, http.StatusBadRequest, apiError{Error: "invalid username"})
 			return
 		}
-		info := sessions.GetSession(u.Affinity.Seed())
+		info := sessions.GetSession(u.SessionParams.Seed())
 		if info == nil {
 			writeJSON(w, http.StatusNotFound, apiError{Error: "no active session"})
 			return
@@ -114,7 +114,7 @@ func handleRotateNow(sessions *utils.SessionManager) http.HandlerFunc {
 			writeJSON(w, http.StatusBadRequest, apiError{Error: "invalid username"})
 			return
 		}
-		info, err := sessions.RotateNow(u.Affinity.Seed())
+		info, err := sessions.RotateNow(u.SessionParams.Seed())
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, apiError{Error: err.Error()})
 			return

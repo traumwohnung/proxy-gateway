@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { create } from '@bufbuild/protobuf';
 import type { ConnectRouter, HandlerContext } from '@connectrpc/connect';
 import { Code, ConnectError } from '@connectrpc/connect';
@@ -19,6 +20,15 @@ const INGEST_TOKEN = process.env.INGEST_TOKEN ?? '';
 const BATCH_MAX_EVENTS = 500;
 const BATCH_MAX_MS = 250;
 
+// hash16 = first 16 bytes of SHA-256 over a canonical JSON string,
+// lowercase hex (32 chars). Same function for session_params and
+// session_meta — they live in separate dim tables but share hash semantics.
+// Computing server-side keeps the wire payload self-describing.
+function hash16(canonicalJson: string): string {
+  if (!canonicalJson || canonicalJson === '{}') return '';
+  return createHash('sha256').update(canonicalJson).digest('hex').slice(0, 32);
+}
+
 interface RawRow {
   eventId: string;
   ts: number;
@@ -32,7 +42,10 @@ interface ConnRow {
   connectionId: string;
   proxyset: string;
   provider: string;
-  sessionParamsHash: string;
+  sessionHash: string;
+  // meta_hash joins session_meta_dim. Empty string ("") means "no meta
+  // supplied"; the dim has no corresponding row in that case.
+  metaHash: string;
   epoch: number;
   sessionDurationMinutes: number;
   upstreamIp: string;
@@ -43,7 +56,7 @@ interface ConnRow {
   durationMs: bigint;
 }
 interface EpochRow {
-  sessionParamsHash: string;
+  sessionHash: string;
   epoch: number;
   upstreamIp: string;
   proxyset: string;
@@ -55,18 +68,21 @@ interface EpochRow {
 interface DimUpsert {
   hash: string;
   ts: number;
-  paramsJson: string;
+  // Empty string means "no canonical JSON on this event"; translated to NULL
+  // server-side so the upsert preserves any existing value (see upsertDim).
+  json: string;
 }
 
 interface Batch {
   raw: RawRow[];
   conns: ConnRow[];
   epochs: EpochRow[];
-  dims: DimUpsert[];
+  paramsDims: DimUpsert[];
+  metaDims: DimUpsert[];
 }
 
 function newBatch(): Batch {
-  return { raw: [], conns: [], epochs: [], dims: [] };
+  return { raw: [], conns: [], epochs: [], paramsDims: [], metaDims: [] };
 }
 
 function checkAuth(ctx: HandlerContext): void {
@@ -78,12 +94,15 @@ function checkAuth(ctx: HandlerContext): void {
   }
 }
 
-function canonicalConnectionClosed(c: ConnectionClosed): string {
+function canonicalConnectionClosed(c: ConnectionClosed, sHash: string, mHash: string): string {
   return JSON.stringify({
     connection_id: c.connectionId,
     proxyset: c.proxyset,
     provider: c.provider,
-    session_params_hash: c.sessionParamsHash,
+    session_hash: sHash,
+    session_params: c.sessionParams,
+    meta_hash: mHash,
+    session_meta: c.sessionMeta || null,
     session_duration_minutes: c.sessionDurationMinutes,
     epoch: c.epoch,
     upstream_ip: c.upstreamIp,
@@ -95,10 +114,10 @@ function canonicalConnectionClosed(c: ConnectionClosed): string {
   });
 }
 
-function canonicalEpochTransition(e: EpochTransition): string {
+function canonicalEpochTransition(e: EpochTransition, hash: string): string {
   return JSON.stringify({
-    session_params_hash: e.sessionParamsHash,
-    params_json: e.paramsJson,
+    session_hash: hash,
+    session_params: e.sessionParams,
     proxyset: e.proxyset,
     provider: e.provider,
     prev_epoch: e.prevEpoch,
@@ -126,11 +145,13 @@ function accept(batch: Batch, event: Event): void {
   switch (p.case) {
     case 'connectionClosed': {
       const c = p.value;
+      const sHash = hash16(c.sessionParams);
+      const mHash = hash16(c.sessionMeta);
       batch.raw.push({
         eventId: event.eventId,
         ts,
         kind: 'connection_closed',
-        payload: canonicalConnectionClosed(c),
+        payload: canonicalConnectionClosed(c, sHash, mHash),
         ingestedAt,
       });
       batch.conns.push({
@@ -139,7 +160,8 @@ function accept(batch: Batch, event: Event): void {
         connectionId: c.connectionId,
         proxyset: c.proxyset,
         provider: c.provider,
-        sessionParamsHash: c.sessionParamsHash,
+        sessionHash: sHash,
+        metaHash: mHash,
         epoch: c.epoch,
         sessionDurationMinutes: c.sessionDurationMinutes,
         upstreamIp: c.upstreamIp,
@@ -149,22 +171,22 @@ function accept(batch: Batch, event: Event): void {
         downloadBytes: c.downloadBytes,
         durationMs: c.durationMs,
       });
-      if (c.sessionParamsHash) {
-        batch.dims.push({ hash: c.sessionParamsHash, ts, paramsJson: '' });
-      }
+      if (sHash) batch.paramsDims.push({ hash: sHash, ts, json: c.sessionParams });
+      if (mHash) batch.metaDims.push({ hash: mHash, ts, json: c.sessionMeta });
       return;
     }
     case 'epochTransition': {
       const e = p.value;
+      const sHash = hash16(e.sessionParams);
       batch.raw.push({
         eventId: event.eventId,
         ts,
         kind: 'epoch_transition',
-        payload: canonicalEpochTransition(e),
+        payload: canonicalEpochTransition(e, sHash),
         ingestedAt,
       });
       batch.epochs.push({
-        sessionParamsHash: e.sessionParamsHash,
+        sessionHash: sHash,
         epoch: e.newEpoch,
         upstreamIp: e.newIp,
         proxyset: e.proxyset,
@@ -173,9 +195,7 @@ function accept(batch: Batch, event: Event): void {
         startReason: e.startReason,
         eventId: event.eventId,
       });
-      if (e.sessionParamsHash) {
-        batch.dims.push({ hash: e.sessionParamsHash, ts, paramsJson: e.paramsJson });
-      }
+      if (sHash) batch.paramsDims.push({ hash: sHash, ts, json: e.sessionParams });
       return;
     }
     case 'dropReport': {
@@ -228,7 +248,8 @@ async function insertConns(rows: ConnRow[]): Promise<void> {
       r.connectionId,
       r.proxyset,
       r.provider,
-      r.sessionParamsHash,
+      r.sessionHash,
+      r.metaHash,
       r.epoch,
       r.sessionDurationMinutes,
       r.upstreamIp,
@@ -241,7 +262,7 @@ async function insertConns(rows: ConnRow[]): Promise<void> {
   );
   await sql`
     INSERT INTO connection_closed
-      (event_id, ts, connection_id, proxyset, provider, session_params_hash, epoch,
+      (event_id, ts, connection_id, proxyset, provider, session_hash, meta_hash, epoch,
        session_duration_minutes, upstream_ip, sni, close_reason,
        upload_bytes, download_bytes, duration_ms)
     VALUES ${vals}
@@ -253,7 +274,7 @@ async function insertEpochs(rows: EpochRow[]): Promise<void> {
   if (rows.length === 0) return;
   const vals = sql.values(
     rows.map((r) => [
-      r.sessionParamsHash,
+      r.sessionHash,
       r.epoch,
       r.upstreamIp,
       r.proxyset,
@@ -265,28 +286,41 @@ async function insertEpochs(rows: EpochRow[]): Promise<void> {
   );
   await sql`
     INSERT INTO session_epoch
-      (session_params_hash, epoch, upstream_ip, proxyset, provider, started_at, start_reason, event_id)
+      (session_hash, epoch, upstream_ip, proxyset, provider, started_at, start_reason, event_id)
     VALUES ${vals}
-    ON CONFLICT (session_params_hash, epoch) DO NOTHING
+    ON CONFLICT (session_hash, epoch) DO NOTHING
   `;
 }
 
-async function upsertDim(rows: DimUpsert[]): Promise<void> {
+async function upsertParamsDim(rows: DimUpsert[]): Promise<void> {
   if (rows.length === 0) return;
-  // Lazy upsert. The wire protocol uses '' to mean "no canonical JSON on
-  // this event"; we translate to NULL on the DB side so that json_extract
-  // functions don't error against partially-known dim rows. Backfill only
-  // when the existing row is still NULL — once we've seen the real JSON we
-  // never overwrite it.
   const vals = sql.values(
-    rows.map((r) => [r.hash, r.paramsJson === '' ? null : r.paramsJson, r.ts, r.ts]),
+    rows.map((r) => [r.hash, r.json === '' || r.json === '{}' ? null : r.json, r.ts, r.ts]),
   );
+  // params_json: first-non-null wins (session identity is immutable per hash).
   await sql`
     INSERT INTO session_params_dim (hash, params_json, first_seen, last_seen)
     VALUES ${vals}
     ON CONFLICT (hash) DO UPDATE SET
       params_json = CASE WHEN session_params_dim.params_json IS NULL THEN EXCLUDED.params_json ELSE session_params_dim.params_json END,
-      last_seen = GREATEST(session_params_dim.last_seen, EXCLUDED.last_seen)
+      last_seen   = GREATEST(session_params_dim.last_seen, EXCLUDED.last_seen)
+  `;
+}
+
+async function upsertMetaDim(rows: DimUpsert[]): Promise<void> {
+  if (rows.length === 0) return;
+  const vals = sql.values(
+    rows.map((r) => [r.hash, r.json === '' || r.json === '{}' ? null : r.json, r.ts, r.ts]),
+  );
+  // meta_json: first-non-null wins, same semantics as params_dim. The dim
+  // is keyed by a content hash of the meta payload, so observing the same
+  // hash twice means we already have its JSON.
+  await sql`
+    INSERT INTO session_meta_dim (hash, meta_json, first_seen, last_seen)
+    VALUES ${vals}
+    ON CONFLICT (hash) DO UPDATE SET
+      meta_json = CASE WHEN session_meta_dim.meta_json IS NULL THEN EXCLUDED.meta_json ELSE session_meta_dim.meta_json END,
+      last_seen = GREATEST(session_meta_dim.last_seen, EXCLUDED.last_seen)
   `;
 }
 
@@ -299,7 +333,8 @@ async function flush(batch: Batch): Promise<void> {
   await sql`BEGIN TRANSACTION`;
   try {
     await insertRaw(batch.raw);
-    await upsertDim(batch.dims);
+    await upsertParamsDim(batch.paramsDims);
+    await upsertMetaDim(batch.metaDims);
     await insertConns(batch.conns);
     await insertEpochs(batch.epochs);
     await sql`COMMIT`;
@@ -311,7 +346,8 @@ async function flush(batch: Batch): Promise<void> {
   batch.raw.length = 0;
   batch.conns.length = 0;
   batch.epochs.length = 0;
-  batch.dims.length = 0;
+  batch.paramsDims.length = 0;
+  batch.metaDims.length = 0;
 }
 
 export function registerIngest(router: ConnectRouter): void {

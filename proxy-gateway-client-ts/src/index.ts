@@ -1,24 +1,20 @@
 export { ProxyGatewayClient, type ProxyGatewayClientOptions } from "./client";
 // Types
 export type {
-    AffinityParams,
     ApiError,
     BuildProxyUsernameOptions,
     HTTPCloakSpec,
     SessionInfo,
-    UsageFilter,
-    UsageResponse,
-    UsageRow,
+    SessionMeta,
+    SessionParams,
     VerifyResult,
 } from "./types";
 // Zod schemas
 export {
-    affinityParamsSchema,
     apiErrorSchema,
-    granularitySchema,
     sessionInfoSchema,
-    usageResponseSchema,
-    usageRowSchema,
+    sessionMetaSchema,
+    sessionParamsSchema,
     verifyResultSchema,
 } from "./types";
 // Username helpers — pure, sync

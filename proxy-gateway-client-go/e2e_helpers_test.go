@@ -256,7 +256,7 @@ func mustBuildUsername(t *testing.T, set string, minutes int, affinity map[strin
 	u, err := proxygatewayclient.BuildUsername(proxygatewayclient.UsernameParams{
 		Set:      set,
 		Minutes:  minutes,
-		Affinity: affinity,
+		SessionParams: affinity,
 	})
 	if err != nil {
 		t.Fatalf("BuildUsername: %v", err)

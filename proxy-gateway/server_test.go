@@ -50,7 +50,7 @@ func TestParseJSONCredsTopLevelSeedStableForSameUsername(t *testing.T) {
 		return proxykit.Resolved(testProxy), nil
 	}))
 	h.Resolve(context.Background(), &proxykit.Request{
-		RawUsername: `{"set":"res","minutes":5,"affinity":{"app":"x"}}`,
+		RawUsername: `{"set":"res","minutes":5,"session_params":{"app":"x"}}`,
 	})
 
 	h2 := ParseJSONCreds(proxykit.HandlerFunc(func(ctx context.Context, _ *proxykit.Request) (*proxykit.Result, error) {
@@ -58,7 +58,7 @@ func TestParseJSONCredsTopLevelSeedStableForSameUsername(t *testing.T) {
 		return proxykit.Resolved(testProxy), nil
 	}))
 	h2.Resolve(context.Background(), &proxykit.Request{
-		RawUsername: `{"set":"res","minutes":5,"affinity":{"app":"x"}}`,
+		RawUsername: `{"set":"res","minutes":5,"session_params":{"app":"x"}}`,
 	})
 	if gotSeed1 != gotSeed2 {
 		t.Fatalf("same username should produce same seed: %d vs %d", gotSeed1, gotSeed2)
@@ -72,7 +72,7 @@ func TestParseJSONCredsDifferentMetaDifferentSeed(t *testing.T) {
 		return proxykit.Resolved(testProxy), nil
 	}))
 	h.Resolve(context.Background(), &proxykit.Request{
-		RawUsername: `{"set":"res","minutes":5,"affinity":{"user":"alice"}}`,
+		RawUsername: `{"set":"res","minutes":5,"session_params":{"user":"alice"}}`,
 	})
 
 	h2 := ParseJSONCreds(proxykit.HandlerFunc(func(ctx context.Context, _ *proxykit.Request) (*proxykit.Result, error) {
@@ -80,7 +80,7 @@ func TestParseJSONCredsDifferentMetaDifferentSeed(t *testing.T) {
 		return proxykit.Resolved(testProxy), nil
 	}))
 	h2.Resolve(context.Background(), &proxykit.Request{
-		RawUsername: `{"set":"res","minutes":5,"affinity":{"user":"bob"}}`,
+		RawUsername: `{"set":"res","minutes":5,"session_params":{"user":"bob"}}`,
 	})
 	if gotSeed1 == gotSeed2 {
 		t.Fatal("different affinity should produce different seeds")
@@ -104,7 +104,7 @@ func TestParseJSONCredsRejectsInvalidJSON(t *testing.T) {
 func TestParseJSONCredsRejectsMissingSet(t *testing.T) {
 	h := ParseJSONCreds(testSource)
 	if _, err := h.Resolve(context.Background(), &proxykit.Request{
-		RawUsername: `{"minutes":0,"affinity":{}}`,
+		RawUsername: `{"minutes":0,"session_params":{}}`,
 	}); err == nil {
 		t.Fatal("expected error")
 	}
@@ -117,7 +117,7 @@ func TestParseJSONCredsRejectsMissingSet(t *testing.T) {
 func TestPasswordAuthRejectsWrong(t *testing.T) {
 	h := PasswordAuth("s3cret", testSource)
 	_, err := h.Resolve(context.Background(), &proxykit.Request{
-		RawUsername: `{"set":"res","minutes":0,"affinity":{}}`,
+		RawUsername: `{"set":"res","minutes":0,"session_params":{}}`,
 		RawPassword: "wrong",
 	})
 	if err == nil {
@@ -128,7 +128,7 @@ func TestPasswordAuthRejectsWrong(t *testing.T) {
 func TestPasswordAuthAcceptsCorrect(t *testing.T) {
 	h := PasswordAuth("s3cret", testSource)
 	_, err := h.Resolve(context.Background(), &proxykit.Request{
-		RawUsername: `{"set":"res","minutes":0,"affinity":{}}`,
+		RawUsername: `{"set":"res","minutes":0,"session_params":{}}`,
 		RawPassword: "s3cret",
 	})
 	if err != nil {
@@ -139,7 +139,7 @@ func TestPasswordAuthAcceptsCorrect(t *testing.T) {
 func TestPasswordAuthDisabledWhenEmpty(t *testing.T) {
 	h := PasswordAuth("", testSource)
 	_, err := h.Resolve(context.Background(), &proxykit.Request{
-		RawUsername: `{"set":"res","minutes":0,"affinity":{}}`,
+		RawUsername: `{"set":"res","minutes":0,"session_params":{}}`,
 		RawPassword: "anything",
 	})
 	if err != nil {
@@ -156,7 +156,7 @@ func TestFullPipeline(t *testing.T) {
 	pipeline := PasswordAuth("pw", ParseJSONCreds(sm))
 
 	req := &proxykit.Request{
-		RawUsername: `{"set":"test","minutes":5,"affinity":{}}`,
+		RawUsername: `{"set":"test","minutes":5,"session_params":{}}`,
 		RawPassword: "pw",
 	}
 	r, err := pipeline.Resolve(context.Background(), req)
@@ -166,7 +166,7 @@ func TestFullPipeline(t *testing.T) {
 
 	// Same username → same sticky session
 	r2, _ := pipeline.Resolve(context.Background(), &proxykit.Request{
-		RawUsername: `{"set":"test","minutes":5,"affinity":{}}`,
+		RawUsername: `{"set":"test","minutes":5,"session_params":{}}`,
 		RawPassword: "pw",
 	})
 	if r2.Proxy.Port != r.Proxy.Port {
@@ -175,7 +175,7 @@ func TestFullPipeline(t *testing.T) {
 
 	// Wrong password
 	if _, err := pipeline.Resolve(context.Background(), &proxykit.Request{
-		RawUsername: `{"set":"test","minutes":5,"affinity":{}}`,
+		RawUsername: `{"set":"test","minutes":5,"session_params":{}}`,
 		RawPassword: "wrong",
 	}); err == nil {
 		t.Fatal("expected auth error")
@@ -192,10 +192,10 @@ func TestFullPipelineZeroTTLNoAffinity(t *testing.T) {
 	pipeline := ParseJSONCreds(utils.NewSessionManager(source))
 
 	r1, _ := pipeline.Resolve(context.Background(), &proxykit.Request{
-		RawUsername: `{"set":"test","minutes":0,"affinity":{}}`,
+		RawUsername: `{"set":"test","minutes":0,"session_params":{}}`,
 	})
 	r2, _ := pipeline.Resolve(context.Background(), &proxykit.Request{
-		RawUsername: `{"set":"test","minutes":0,"affinity":{}}`,
+		RawUsername: `{"set":"test","minutes":0,"session_params":{}}`,
 	})
 	if r1.Proxy.Port == r2.Proxy.Port {
 		t.Fatal("0 minutes should not pin")
@@ -211,7 +211,7 @@ func TestFullPipelineSeedFlowsToSource(t *testing.T) {
 
 	pipeline := ParseJSONCreds(utils.NewSessionManager(source))
 	pipeline.Resolve(context.Background(), &proxykit.Request{
-		RawUsername: `{"set":"test","minutes":5,"affinity":{}}`,
+		RawUsername: `{"set":"test","minutes":5,"session_params":{}}`,
 	})
 
 	if gotSeed == nil {
@@ -230,7 +230,7 @@ func TestFullPipelineNilSeedWithoutAffinity(t *testing.T) {
 
 	pipeline := ParseJSONCreds(utils.NewSessionManager(source))
 	pipeline.Resolve(context.Background(), &proxykit.Request{
-		RawUsername: `{"set":"test","minutes":0,"affinity":{}}`,
+		RawUsername: `{"set":"test","minutes":0,"session_params":{}}`,
 	})
 
 	if !called {
@@ -353,11 +353,11 @@ func TestRotateNowChangesSeed(t *testing.T) {
 	sm := utils.NewSessionManager(source)
 	pipeline := ParseJSONCreds(sm)
 
-	username := `{"set":"test","minutes":60,"affinity":{}}`
+	username := `{"set":"test","minutes":60,"session_params":{}}`
 	pipeline.Resolve(context.Background(), &proxykit.Request{RawUsername: username})
 
 	u, _ := ParseUsername(username)
-	seed := u.Affinity.Seed()
+	seed := u.SessionParams.Seed()
 	info := sm.GetSession(seed)
 	if info == nil {
 		t.Fatal("expected session")

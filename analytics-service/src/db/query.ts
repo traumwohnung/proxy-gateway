@@ -2,11 +2,13 @@ import { sql } from './client.js';
 import {
   type Dimension,
   dimName,
-  dimRequiresDim,
+  dimRequiresMetaDim,
+  dimRequiresParamsDim,
   type Metric,
   type UsageQuery as UsageQuery_,
   type Where as Where_,
-  whereRequiresDim,
+  whereRequiresMetaDim,
+  whereRequiresParamsDim,
 } from './query-schema.js';
 
 type UsageQuery = UsageQuery_;
@@ -24,9 +26,10 @@ export { UsageQuery, validate } from './query-schema.js';
 // interpolation is injection-safe. We pass the assembled string through
 // waddler's sql.raw — no separate parameter binding needed.
 //
-// Queries target `connection_closed AS cc`. When a JSON dimension or filter
-// is present, we LEFT JOIN `session_params_dim AS dim` and read keys via
-// DuckDB's json_extract_string.
+// Queries target `connection_closed AS cc`. When a session_params JSON
+// dimension/filter is present we LEFT JOIN `session_params_dim AS pdim`;
+// when a session_meta JSON dimension/filter is present we LEFT JOIN
+// `session_meta_dim AS mdim`. Each JOIN is added only on demand.
 // ---------------------------------------------------------------------------
 
 const UNIT_SECONDS: Record<'minute' | 'hour' | 'day', number> = {
@@ -55,8 +58,10 @@ function dimExpr(d: Dimension): string {
       return 'cc.provider';
     case 'close_reason':
       return 'cc.close_reason';
-    case 'json':
-      return `json_extract_string(dim.params_json, '$.${d.key}')`;
+    case 'session_params':
+      return `json_extract_string(pdim.params_json, '$.${d.key}')`;
+    case 'session_meta':
+      return `json_extract_string(mdim.meta_json, '$.${d.key}')`;
   }
 }
 
@@ -73,14 +78,19 @@ function metricExpr(m: Metric): string {
   }
 }
 
-function jsonKeyExpr(key: string): string {
-  return `json_extract_string(dim.params_json, '$.${key}')`;
+function paramsKeyExpr(key: string): string {
+  return `json_extract_string(pdim.params_json, '$.${key}')`;
+}
+
+function metaKeyExpr(key: string): string {
+  return `json_extract_string(mdim.meta_json, '$.${key}')`;
 }
 
 function renderWhere(
   time: UsageQuery['time'],
   where: Where | undefined,
-  needsDim: boolean,
+  needsParamsDim: boolean,
+  needsMetaDim: boolean,
 ): string[] {
   const clauses: string[] = [`cc.ts >= ${time.from}`, `cc.ts <= ${time.to}`];
   if (!where) return clauses;
@@ -119,25 +129,39 @@ function renderWhere(
       `cc.session_duration_minutes BETWEEN ${where.session_duration_between[0]} AND ${where.session_duration_between[1]}`,
     );
 
-  if (needsDim) {
+  if (needsParamsDim) {
     for (const p of where.session_params_eq ?? [])
-      clauses.push(`${jsonKeyExpr(p.key)} = ${quoteScalar(p.value)}`);
+      clauses.push(`${paramsKeyExpr(p.key)} = ${quoteScalar(p.value)}`);
     for (const p of where.session_params_ne ?? [])
-      clauses.push(`${jsonKeyExpr(p.key)} != ${quoteScalar(p.value)}`);
+      clauses.push(`${paramsKeyExpr(p.key)} != ${quoteScalar(p.value)}`);
     for (const p of where.session_params_in ?? [])
-      clauses.push(`${jsonKeyExpr(p.key)} IN (${quoteList(p.values)})`);
+      clauses.push(`${paramsKeyExpr(p.key)} IN (${quoteList(p.values)})`);
     for (const p of where.session_params_not_in ?? [])
-      clauses.push(`${jsonKeyExpr(p.key)} NOT IN (${quoteList(p.values)})`);
+      clauses.push(`${paramsKeyExpr(p.key)} NOT IN (${quoteList(p.values)})`);
     for (const k of where.session_params_has_key ?? [])
-      clauses.push(`${jsonKeyExpr(k)} IS NOT NULL`);
+      clauses.push(`${paramsKeyExpr(k)} IS NOT NULL`);
+  }
+
+  if (needsMetaDim) {
+    for (const p of where.session_meta_eq ?? [])
+      clauses.push(`${metaKeyExpr(p.key)} = ${quoteScalar(p.value)}`);
+    for (const p of where.session_meta_ne ?? [])
+      clauses.push(`${metaKeyExpr(p.key)} != ${quoteScalar(p.value)}`);
+    for (const p of where.session_meta_in ?? [])
+      clauses.push(`${metaKeyExpr(p.key)} IN (${quoteList(p.values)})`);
+    for (const p of where.session_meta_not_in ?? [])
+      clauses.push(`${metaKeyExpr(p.key)} NOT IN (${quoteList(p.values)})`);
+    for (const k of where.session_meta_has_key ?? []) clauses.push(`${metaKeyExpr(k)} IS NOT NULL`);
   }
 
   return clauses;
 }
 
 export function renderSQL(q: UsageQuery): string {
-  const needsDim = (q.group_by ?? []).some(dimRequiresDim) || whereRequiresDim(q.where);
-  const clauses = renderWhere(q.time, q.where, needsDim);
+  const groupBys = q.group_by ?? [];
+  const needsParamsDim = groupBys.some(dimRequiresParamsDim) || whereRequiresParamsDim(q.where);
+  const needsMetaDim = groupBys.some(dimRequiresMetaDim) || whereRequiresMetaDim(q.where);
+  const clauses = renderWhere(q.time, q.where, needsParamsDim, needsMetaDim);
 
   const selectCols: string[] = [];
   const groupCols: string[] = [];
@@ -157,9 +181,14 @@ export function renderSQL(q: UsageQuery): string {
 
   selectCols.push(`${metricExpr(q.metric)} AS value`);
 
-  const join = needsDim
-    ? 'LEFT JOIN session_params_dim AS dim ON dim.hash = cc.session_params_hash'
-    : '';
+  const joins: string[] = [];
+  if (needsParamsDim) {
+    joins.push('LEFT JOIN session_params_dim AS pdim ON pdim.hash = cc.session_hash');
+  }
+  if (needsMetaDim) {
+    joins.push('LEFT JOIN session_meta_dim AS mdim ON mdim.hash = cc.meta_hash');
+  }
+  const join = joins.join(' ');
 
   const groupBy = groupCols.length ? `GROUP BY ${groupCols.join(', ')}` : '';
 

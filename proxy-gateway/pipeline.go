@@ -166,14 +166,15 @@ func trackUsage(tracker *UsageTracker, epochSrc epochLookup, next proxykit.Handl
 		ct := &usageConnTracker{
 			tracker: tracker,
 			rec: connRecord{
-				connectionID:      newConnectionID(),
-				proxyset:          getSet(ctx),
-				provider:          utils.GetProviderName(ctx),
-				sessionParamsHash: utils.GetSessionParamsHash(ctx),
-				minutes:           getMinutes(ctx),
-				epoch:             epoch,
-				upstreamIP:        upstreamIP,
-				startedAt:         time.Now().UTC(),
+				connectionID:  newConnectionID(),
+				proxyset:      getSet(ctx),
+				provider:      utils.GetProviderName(ctx),
+				sessionParams: utils.GetSessionParamsJSON(ctx),
+				sessionMeta:   getSessionMetaJSON(ctx),
+				minutes:       getMinutes(ctx),
+				epoch:         epoch,
+				upstreamIP:    upstreamIP,
+				startedAt:     time.Now().UTC(),
 			},
 		}
 		result.ConnTracker = proxykit.ChainTrackers(result.ConnTracker, ct)

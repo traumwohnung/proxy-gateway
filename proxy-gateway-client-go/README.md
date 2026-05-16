@@ -22,8 +22,8 @@ client := proxygatewayclient.NewProxyClient().
 //    so sessions stay stable across processes and call sites.
 cfg := proxygatewayclient.NewProxyConfiguration("residential").
     Minutes(60).
-    Affinity("platform", "myapp").
-    Affinity("user", "alice").
+    SessionParams("user", "alice").        // identity → drives upstream IP
+    SessionMeta("tenant", "acme").         // informational → carried to analytics
     WithProxyClient(client)
 
 // 3a. Get a full proxy URL (http://user:x@host:port)
@@ -38,11 +38,11 @@ _, _ = cfg.Rotate(ctx)
 
 ### Per-call cloning
 
-Clone a base configuration to add request-specific affinity without mutating the shared template:
+Clone a base configuration to add request-specific identity without mutating the shared template:
 
 ```go
 base := proxygatewayclient.NewProxyConfiguration("residential").Minutes(60).WithProxyClient(client)
-perUser := base.Clone().Affinity("user", email)
+perUser := base.Clone().SessionParams("user", email).SessionMeta("request_id", reqID)
 url, _ := perUser.BuildURL()
 ```
 
@@ -77,11 +77,12 @@ Closure returns `(value, ok)`. `ok=false` → configuration rotates, closure run
 | Method | Description |
 |--------|-------------|
 | `NewProxyConfiguration(set)` | Start a configuration for the given proxy set |
-| `.Minutes(n)` | Session-affinity duration |
-| `.Affinity(k, v)` | Add a key/value to the affinity map |
+| `.Minutes(n)` | Session duration (0 = per-request, 1–1440 = sticky) |
+| `.SessionParams(k, v)` | Add a key/value to session_params (drives upstream IP) |
+| `.SessionMeta(k, v)` | Add a key/value to session_meta (informational, for analytics) |
 | `.HTTPCloak(spec)` | Enable TLS fingerprint spoofing |
 | `.WithProxyClient(c)` | Attach gateway connection (required for URL/HTTPClient/Rotate) |
-| `.Clone()` | Deep-copy (affinity map copied, client pointer shared) |
+| `.Clone()` | Deep-copy (session_params + session_meta copied, client pointer shared) |
 | `.BuildUsername()` / `.MustBuildUsername()` | Encode the current config to base64 |
 | `.BuildURL()` / `.MustBuildURL()` | Full `http://user:x@host:port` URL |
 | `.BuildHTTPClient()` | `*http.Client` whose Transport routes through the gateway |
@@ -101,7 +102,6 @@ Closure returns `(value, ok)`. `ok=false` → configuration rotates, closure run
 | `ListSessions(ctx)` | List all active sticky sessions |
 | `GetSession(ctx, username)` | Get a session by base64 username (nil if not found) |
 | `RotateNow(ctx, username)` | Re-roll rotation — gateway picks a new upstream (nil if not found) |
-| `QueryUsage(ctx, filter)` | Aggregated bandwidth usage |
 
 ### Retry
 

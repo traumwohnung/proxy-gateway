@@ -29,7 +29,10 @@ interface FormValues {
     session_params_eq: { key: string; value: string }[];
     session_params_has_key: { key: string }[];
   };
-  group_by: { kind: 'proxyset' | 'provider' | 'close_reason' | 'json'; key: string }[];
+  group_by: {
+    kind: 'proxyset' | 'provider' | 'close_reason' | 'session_params' | 'session_meta';
+    key: string;
+  }[];
   sort_by: string;
   sort_dir: 'asc' | 'desc';
   limit: number;
@@ -56,7 +59,11 @@ function queryToValues(q: UsageQuery): FormValues {
       session_params_has_key: (w.session_params_has_key ?? []).map((k) => ({ key: k })),
     },
     group_by: (q.group_by ?? []).map((d) =>
-      d.kind === 'json' ? { kind: 'json' as const, key: d.key } : { kind: d.kind, key: '' },
+      d.kind === 'session_params'
+        ? { kind: 'session_params' as const, key: d.key }
+        : d.kind === 'session_meta'
+          ? { kind: 'session_meta' as const, key: d.key }
+          : { kind: d.kind, key: '' },
     ),
     sort_by: q.sort?.by ?? 'metric',
     sort_dir: q.sort?.dir ?? 'desc',
@@ -89,8 +96,14 @@ function valuesToQuery(v: FormValues): UsageQuery {
   if (Object.keys(where).length) next.where = where;
 
   const groups: Dimension[] = v.group_by
-    .filter((g) => g.kind !== 'json' || g.key.trim())
-    .map((g) => (g.kind === 'json' ? { kind: 'json', key: g.key.trim() } : { kind: g.kind }));
+    .filter((g) => (g.kind !== 'session_params' && g.kind !== 'session_meta') || g.key.trim())
+    .map((g) =>
+      g.kind === 'session_params'
+        ? { kind: 'session_params', key: g.key.trim() }
+        : g.kind === 'session_meta'
+          ? { kind: 'session_meta', key: g.key.trim() }
+          : { kind: g.kind },
+    );
   if (groups.length) next.group_by = groups;
 
   if (v.sort_by) next.sort = { by: v.sort_by, dir: v.sort_dir };
@@ -339,15 +352,20 @@ export default function QueryForm({ query, onSubmit, isLoading }: Props) {
                       name={`group_by[${i}].kind`}
                       children={(sub) => (
                         <Select
-                          value={sub.state.value as 'proxyset' | 'json'}
-                          onValueChange={(v) => sub.handleChange(v as 'proxyset' | 'json')}
+                          value={sub.state.value}
+                          onValueChange={(v) =>
+                            sub.handleChange(v as FormValues['group_by'][number]['kind'])
+                          }
                         >
                           <SelectTrigger className="w-36">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
                             <SelectItem value="proxyset">Proxyset</SelectItem>
-                            <SelectItem value="json">JSON Key</SelectItem>
+                            <SelectItem value="provider">Provider</SelectItem>
+                            <SelectItem value="close_reason">Close reason</SelectItem>
+                            <SelectItem value="session_params">Session params key</SelectItem>
+                            <SelectItem value="session_meta">Session meta key</SelectItem>
                           </SelectContent>
                         </Select>
                       )}
@@ -355,7 +373,8 @@ export default function QueryForm({ query, onSubmit, isLoading }: Props) {
                     <form.Field
                       name={`group_by[${i}].kind`}
                       children={(sub) =>
-                        sub.state.value === 'json' ? (
+                        sub.state.value === 'session_params' ||
+                        sub.state.value === 'session_meta' ? (
                           <form.Field
                             name={`group_by[${i}].key`}
                             children={(kf) => (

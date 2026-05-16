@@ -122,15 +122,15 @@ func TestRetryN_EarlyExit(t *testing.T) {
 
 func TestProxyConfiguration_Clone(t *testing.T) {
 	pc := NewProxyClient().Proxy("127.0.0.1", 8100)
-	a := NewProxyConfiguration("set").Minutes(60).Affinity("user", "alice").WithProxyClient(pc)
-	b := a.Clone().Affinity("user", "bob")
+	a := NewProxyConfiguration("set").Minutes(60).SessionParams("user", "alice").WithProxyClient(pc)
+	b := a.Clone().SessionParams("user", "bob")
 
 	ua, _ := a.BuildUsername()
 	ub, _ := b.BuildUsername()
 	if ua == ub {
 		t.Fatal("expected clone mutation to produce a different username")
 	}
-	if a.params.Affinity["user"] != "alice" {
-		t.Fatalf("original affinity was mutated: %v", a.params.Affinity)
+	if a.params.SessionParams["user"] != "alice" {
+		t.Fatalf("original affinity was mutated: %v", a.params.SessionParams)
 	}
 }

@@ -31,43 +31,62 @@ type ProxyConfiguration struct {
 func NewProxyConfiguration(set string) *ProxyConfiguration {
 	return &ProxyConfiguration{
 		params: UsernameParams{
-			Set:      set,
-			Affinity: map[string]any{},
+			Set:           set,
+			SessionParams: map[string]any{},
 		},
 	}
 }
 
-// Clone returns a deep copy of the configuration. The affinity map is
-// copied so further mutations on the clone do not affect the original.
-// The bound *ProxyClient pointer is shared (it is immutable in practice).
+// Clone returns a deep copy of the configuration. The session_params and
+// session_meta maps are copied so further mutations on the clone do not
+// affect the original. The bound *ProxyClient pointer is shared (it is
+// immutable in practice).
 func (b *ProxyConfiguration) Clone() *ProxyConfiguration {
 	cp := &ProxyConfiguration{
 		params: b.params,
 		client: b.client,
 	}
-	if b.params.Affinity != nil {
-		cp.params.Affinity = make(map[string]any, len(b.params.Affinity))
-		for k, v := range b.params.Affinity {
-			cp.params.Affinity[k] = v
+	if b.params.SessionParams != nil {
+		cp.params.SessionParams = make(map[string]any, len(b.params.SessionParams))
+		for k, v := range b.params.SessionParams {
+			cp.params.SessionParams[k] = v
+		}
+	}
+	if b.params.SessionMeta != nil {
+		cp.params.SessionMeta = make(map[string]any, len(b.params.SessionMeta))
+		for k, v := range b.params.SessionMeta {
+			cp.params.SessionMeta[k] = v
 		}
 	}
 	return cp
 }
 
-// Minutes sets the session-affinity duration (0 = new proxy per request,
+// Minutes sets the session duration (0 = new proxy per request,
 // 1–1440 = sticky).
 func (b *ProxyConfiguration) Minutes(n int) *ProxyConfiguration {
 	b.params.Minutes = n
 	return b
 }
 
-// Affinity adds a key/value to the affinity map. Two configurations with
-// the same set + same affinity map share a session on the gateway.
-func (b *ProxyConfiguration) Affinity(key string, value any) *ProxyConfiguration {
-	if b.params.Affinity == nil {
-		b.params.Affinity = map[string]any{}
+// SessionParams adds a key/value to the session_params map. Two
+// configurations with the same set + same session_params share a session
+// on the gateway (same upstream IP).
+func (b *ProxyConfiguration) SessionParams(key string, value any) *ProxyConfiguration {
+	if b.params.SessionParams == nil {
+		b.params.SessionParams = map[string]any{}
 	}
-	b.params.Affinity[key] = value
+	b.params.SessionParams[key] = value
+	return b
+}
+
+// SessionMeta adds a key/value to the session_meta map. Informational
+// only — never affects session identity or IP selection; carried through
+// to the analytics service for filtering/grouping.
+func (b *ProxyConfiguration) SessionMeta(key string, value any) *ProxyConfiguration {
+	if b.params.SessionMeta == nil {
+		b.params.SessionMeta = map[string]any{}
+	}
+	b.params.SessionMeta[key] = value
 	return b
 }
 

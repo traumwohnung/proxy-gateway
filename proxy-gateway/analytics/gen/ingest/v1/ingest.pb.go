@@ -160,10 +160,10 @@ type ConnectionClosed struct {
 	ConnectionId string                 `protobuf:"bytes,1,opt,name=connection_id,json=connectionId,proto3" json:"connection_id,omitempty"`
 	Proxyset     string                 `protobuf:"bytes,2,opt,name=proxyset,proto3" json:"proxyset,omitempty"`
 	Provider     string                 `protobuf:"bytes,3,opt,name=provider,proto3" json:"provider,omitempty"`
-	// First 16 bytes of SHA-256 over the canonical JSON of the session params,
-	// lowercase hex (32 chars). Canonical form: keys sorted, no whitespace,
-	// numbers in their natural JSON form. The gateway computes this locally.
-	SessionParamsHash      string `protobuf:"bytes,4,opt,name=session_params_hash,json=sessionParamsHash,proto3" json:"session_params_hash,omitempty"`
+	// Canonical JSON of the session params (sorted keys, no whitespace).
+	// Drives session identity / IP selection. The analytics server derives
+	// session_hash = sha256[:16] of this string for joins.
+	SessionParams          string `protobuf:"bytes,4,opt,name=session_params,json=sessionParams,proto3" json:"session_params,omitempty"`
 	SessionDurationMinutes int32  `protobuf:"varint,5,opt,name=session_duration_minutes,json=sessionDurationMinutes,proto3" json:"session_duration_minutes,omitempty"`
 	// Which IP-binding generation this connection belongs to. 0 = initial.
 	Epoch      int32  `protobuf:"varint,6,opt,name=epoch,proto3" json:"epoch,omitempty"`
@@ -174,6 +174,12 @@ type ConnectionClosed struct {
 	UploadBytes   int64  `protobuf:"varint,10,opt,name=upload_bytes,json=uploadBytes,proto3" json:"upload_bytes,omitempty"`
 	DownloadBytes int64  `protobuf:"varint,11,opt,name=download_bytes,json=downloadBytes,proto3" json:"download_bytes,omitempty"`
 	DurationMs    int64  `protobuf:"varint,12,opt,name=duration_ms,json=durationMs,proto3" json:"duration_ms,omitempty"`
+	// session_meta is a free-form JSON map supplied by the client purely for
+	// analytics enrichment — it does NOT influence session identity or IP
+	// selection. Canonical (sorted-keys) JSON, "{}" when none was supplied.
+	// Stored as a column on session_params_dim keyed by session_hash
+	// (last-write-wins; same session, different meta values just overwrite).
+	SessionMeta   string `protobuf:"bytes,13,opt,name=session_meta,json=sessionMeta,proto3" json:"session_meta,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -229,9 +235,9 @@ func (x *ConnectionClosed) GetProvider() string {
 	return ""
 }
 
-func (x *ConnectionClosed) GetSessionParamsHash() string {
+func (x *ConnectionClosed) GetSessionParams() string {
 	if x != nil {
-		return x.SessionParamsHash
+		return x.SessionParams
 	}
 	return ""
 }
@@ -292,22 +298,28 @@ func (x *ConnectionClosed) GetDurationMs() int64 {
 	return 0
 }
 
+func (x *ConnectionClosed) GetSessionMeta() string {
+	if x != nil {
+		return x.SessionMeta
+	}
+	return ""
+}
+
 // EpochTransition is emitted whenever the IP bound to a logical session
 // changes. The very first binding is also a transition (start_reason =
 // "first_bind", prev_epoch = -1).
 type EpochTransition struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	SessionParamsHash string                 `protobuf:"bytes,1,opt,name=session_params_hash,json=sessionParamsHash,proto3" json:"session_params_hash,omitempty"`
-	// Canonical JSON of the session params. Populated on first_bind so the
-	// ingest server can backfill session_params_dim.params_json. May be empty
-	// on subsequent transitions.
-	ParamsJson string `protobuf:"bytes,2,opt,name=params_json,json=paramsJson,proto3" json:"params_json,omitempty"`
-	Proxyset   string `protobuf:"bytes,3,opt,name=proxyset,proto3" json:"proxyset,omitempty"`
-	Provider   string `protobuf:"bytes,4,opt,name=provider,proto3" json:"provider,omitempty"`
-	PrevEpoch  int32  `protobuf:"varint,5,opt,name=prev_epoch,json=prevEpoch,proto3" json:"prev_epoch,omitempty"` // -1 on first_bind
-	NewEpoch   int32  `protobuf:"varint,6,opt,name=new_epoch,json=newEpoch,proto3" json:"new_epoch,omitempty"`
-	PrevIp     string `protobuf:"bytes,7,opt,name=prev_ip,json=prevIp,proto3" json:"prev_ip,omitempty"` // empty on first_bind
-	NewIp      string `protobuf:"bytes,8,opt,name=new_ip,json=newIp,proto3" json:"new_ip,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Canonical JSON of the session params (sorted keys, no whitespace).
+	// The analytics server derives session_hash = sha256[:16] of this string
+	// for joins. Always populated.
+	SessionParams string `protobuf:"bytes,1,opt,name=session_params,json=sessionParams,proto3" json:"session_params,omitempty"`
+	Proxyset      string `protobuf:"bytes,3,opt,name=proxyset,proto3" json:"proxyset,omitempty"`
+	Provider      string `protobuf:"bytes,4,opt,name=provider,proto3" json:"provider,omitempty"`
+	PrevEpoch     int32  `protobuf:"varint,5,opt,name=prev_epoch,json=prevEpoch,proto3" json:"prev_epoch,omitempty"` // -1 on first_bind
+	NewEpoch      int32  `protobuf:"varint,6,opt,name=new_epoch,json=newEpoch,proto3" json:"new_epoch,omitempty"`
+	PrevIp        string `protobuf:"bytes,7,opt,name=prev_ip,json=prevIp,proto3" json:"prev_ip,omitempty"` // empty on first_bind
+	NewIp         string `protobuf:"bytes,8,opt,name=new_ip,json=newIp,proto3" json:"new_ip,omitempty"`
 	// first_bind|ttl|forced|burned|upstream_5xx|client_signal|pool_reshuffle
 	StartReason   string `protobuf:"bytes,9,opt,name=start_reason,json=startReason,proto3" json:"start_reason,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -344,16 +356,9 @@ func (*EpochTransition) Descriptor() ([]byte, []int) {
 	return file_ingest_v1_ingest_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *EpochTransition) GetSessionParamsHash() string {
+func (x *EpochTransition) GetSessionParams() string {
 	if x != nil {
-		return x.SessionParamsHash
-	}
-	return ""
-}
-
-func (x *EpochTransition) GetParamsJson() string {
-	if x != nil {
-		return x.ParamsJson
+		return x.SessionParams
 	}
 	return ""
 }
@@ -566,12 +571,12 @@ const file_ingest_v1_ingest_proto_rawDesc = "" +
 	"\vdrop_report\x18\f \x01(\v2\x15.ingest.v1.DropReportH\x00R\n" +
 	"dropReport\x12;\n" +
 	"\fmitm_request\x18\r \x01(\v2\x16.ingest.v1.MitmRequestH\x00R\vmitmRequestB\t\n" +
-	"\apayload\"\xb0\x03\n" +
+	"\apayload\"\xca\x03\n" +
 	"\x10ConnectionClosed\x12#\n" +
 	"\rconnection_id\x18\x01 \x01(\tR\fconnectionId\x12\x1a\n" +
 	"\bproxyset\x18\x02 \x01(\tR\bproxyset\x12\x1a\n" +
-	"\bprovider\x18\x03 \x01(\tR\bprovider\x12.\n" +
-	"\x13session_params_hash\x18\x04 \x01(\tR\x11sessionParamsHash\x128\n" +
+	"\bprovider\x18\x03 \x01(\tR\bprovider\x12%\n" +
+	"\x0esession_params\x18\x04 \x01(\tR\rsessionParams\x128\n" +
 	"\x18session_duration_minutes\x18\x05 \x01(\x05R\x16sessionDurationMinutes\x12\x14\n" +
 	"\x05epoch\x18\x06 \x01(\x05R\x05epoch\x12\x1f\n" +
 	"\vupstream_ip\x18\a \x01(\tR\n" +
@@ -582,11 +587,10 @@ const file_ingest_v1_ingest_proto_rawDesc = "" +
 	" \x01(\x03R\vuploadBytes\x12%\n" +
 	"\x0edownload_bytes\x18\v \x01(\x03R\rdownloadBytes\x12\x1f\n" +
 	"\vduration_ms\x18\f \x01(\x03R\n" +
-	"durationMs\"\xa9\x02\n" +
-	"\x0fEpochTransition\x12.\n" +
-	"\x13session_params_hash\x18\x01 \x01(\tR\x11sessionParamsHash\x12\x1f\n" +
-	"\vparams_json\x18\x02 \x01(\tR\n" +
-	"paramsJson\x12\x1a\n" +
+	"durationMs\x12!\n" +
+	"\fsession_meta\x18\r \x01(\tR\vsessionMeta\"\x92\x02\n" +
+	"\x0fEpochTransition\x12%\n" +
+	"\x0esession_params\x18\x01 \x01(\tR\rsessionParams\x12\x1a\n" +
 	"\bproxyset\x18\x03 \x01(\tR\bproxyset\x12\x1a\n" +
 	"\bprovider\x18\x04 \x01(\tR\bprovider\x12\x1d\n" +
 	"\n" +
@@ -594,7 +598,7 @@ const file_ingest_v1_ingest_proto_rawDesc = "" +
 	"\tnew_epoch\x18\x06 \x01(\x05R\bnewEpoch\x12\x17\n" +
 	"\aprev_ip\x18\a \x01(\tR\x06prevIp\x12\x15\n" +
 	"\x06new_ip\x18\b \x01(\tR\x05newIp\x12!\n" +
-	"\fstart_reason\x18\t \x01(\tR\vstartReason\"\xad\x01\n" +
+	"\fstart_reason\x18\t \x01(\tR\vstartReasonJ\x04\b\x02\x10\x03R\vparams_json\"\xad\x01\n" +
 	"\n" +
 	"DropReport\x12%\n" +
 	"\x0edropped_events\x18\x01 \x01(\x03R\rdroppedEvents\x12=\n" +

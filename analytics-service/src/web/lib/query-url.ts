@@ -52,13 +52,20 @@ export function parseQuery(params: URLSearchParams): UsageQuery {
 
   if (Object.keys(where).length) q.where = where;
 
-  const groups = params.getAll('group'); // "proxyset" | "provider" | "close_reason" | "json:<key>"
+  // "proxyset" | "provider" | "close_reason"
+  // | "session_params:<key>" | "session_meta:<key>"
+  // Legacy form "json:<key>" still parses as session_params.
+  const groups = params.getAll('group');
   if (groups.length) {
     q.group_by = groups.map<Dimension>((g) => {
       if (g === 'proxyset') return { kind: 'proxyset' };
       if (g === 'provider') return { kind: 'provider' };
       if (g === 'close_reason') return { kind: 'close_reason' };
-      return { kind: 'json', key: g.replace(/^json:/, '') };
+      if (g.startsWith('session_meta:'))
+        return { kind: 'session_meta', key: g.slice('session_meta:'.length) };
+      if (g.startsWith('session_params:'))
+        return { kind: 'session_params', key: g.slice('session_params:'.length) };
+      return { kind: 'session_params', key: g.replace(/^json:/, '') };
     });
   }
 
@@ -95,7 +102,11 @@ export function serializeQuery(q: UsageQuery): URLSearchParams {
   for (const e of w.session_params_eq ?? []) p.append('session_params_eq', `${e.key}:${e.value}`);
   for (const k of w.session_params_has_key ?? []) p.append('session_params_has_key', k);
   for (const d of q.group_by ?? []) {
-    p.append('group', d.kind === 'json' ? `json:${d.key}` : d.kind);
+    if (d.kind === 'session_params' || d.kind === 'session_meta') {
+      p.append('group', `${d.kind}:${d.key}`);
+    } else {
+      p.append('group', d.kind);
+    }
   }
   if (q.sort) {
     p.set('sort_by', q.sort.by);

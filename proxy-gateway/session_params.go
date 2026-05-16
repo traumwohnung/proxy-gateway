@@ -1,46 +1,43 @@
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"sort"
 
 	"proxy-kit"
 )
 
-// AffinityParams are the fields that determine session identity.
-// Two requests with the same AffinityParams get the same session.
+// SessionParams are the fields that determine session identity.
+// Two requests with the same SessionParams get the same session.
 // minutes (TTL) is deliberately excluded — changing TTL doesn't create
 // a new session.
-type AffinityParams struct {
+type SessionParams struct {
 	Set  string                 `json:"set"`
 	Meta map[string]interface{} `json:"meta"`
 }
 
 // Seed computes the uint64 session identity seed.
-func (a *AffinityParams) Seed() uint64 {
+func (a *SessionParams) Seed() uint64 {
 	return proxykit.TopLevelSeed(a.Set + "\x00" + canonicalMeta(a.Meta))
 }
 
-// CanonicalJSON returns a stable JSON representation of the affinity params
-// suitable for use as a JSONB value in the usage bucket key.
-func (a *AffinityParams) CanonicalJSON() string {
-	meta := canonicalMeta(a.Meta)
-	return meta
+// CanonicalJSON returns a stable JSON representation of the session params
+// suitable for use as a JSON value in analytics events.
+func (a *SessionParams) CanonicalJSON() string {
+	return canonicalMeta(a.Meta)
 }
 
-// Hash returns the first 16 bytes of SHA-256(canonical_json) as lowercase hex.
-// This is the session_params_hash sent on analytics events and used as the
-// join key in session_params_dim / session_epoch. The hash is computed
-// locally on the hot path with no DB round-trip.
-func (a *AffinityParams) Hash() string {
-	sum := sha256.Sum256([]byte(a.CanonicalJSON()))
-	return hex.EncodeToString(sum[:16])
+// MetaCanonicalJSON returns the canonical JSON for a free-form session_meta
+// map. Reuses canonicalMeta so session_meta serializes identically to
+// session_params (sorted keys, no whitespace). Unlike session_params, meta
+// never affects session identity — it's informational only and stored on
+// the analytics side keyed by the session_params hash.
+func MetaCanonicalJSON(m map[string]interface{}) string {
+	return canonicalMeta(m)
 }
 
 // ---------------------------------------------------------------------------
-// Canonical meta serialization (sorted keys for stable hashing)
+// Canonical map serialization (sorted keys for stable hashing)
 // ---------------------------------------------------------------------------
 
 func canonicalMeta(meta map[string]interface{}) string {

@@ -32,7 +32,10 @@ type ConnectionClosed struct {
 	ConnectionID           string
 	Proxyset               string
 	Provider               string
-	SessionParamsHash      string
+	// SessionParams is the canonical (sorted-keys) JSON of the session
+	// params. Drives session identity / IP selection. The analytics server
+	// derives session_hash = sha256[:16] of this string for joins.
+	SessionParams          string
 	SessionDurationMinutes int32
 	Epoch                  int32
 	UpstreamIP             string
@@ -41,21 +44,24 @@ type ConnectionClosed struct {
 	UploadBytes            int64
 	DownloadBytes          int64
 	DurationMs             int64
+	// SessionMeta is the canonical JSON of the informational meta map.
+	// Stored on the analytics side as a column on session_params_dim keyed
+	// by session_hash — no separate hash, last-write-wins on overlap.
+	SessionMeta string
 }
 
 // EpochTransition is the gateway-facing shape for the EpochTransition
 // variant. PrevEpoch is -1 on first_bind; PrevIP empty on first_bind.
 type EpochTransition struct {
-	Timestamp         time.Time
-	SessionParamsHash string
-	ParamsJSON        string
-	Proxyset          string
-	Provider          string
-	PrevEpoch         int32
-	NewEpoch          int32
-	PrevIP            string
-	NewIP             string
-	StartReason       string
+	Timestamp     time.Time
+	SessionParams string // canonical JSON; server derives session_hash
+	Proxyset      string
+	Provider      string
+	PrevEpoch     int32
+	NewEpoch      int32
+	PrevIP        string
+	NewIP         string
+	StartReason   string
 }
 
 // Client maintains a long-lived RecordEvents stream with reconnect+backoff
@@ -125,7 +131,7 @@ func (c *Client) SendConnectionClosed(cc ConnectionClosed) {
 				ConnectionId:           cc.ConnectionID,
 				Proxyset:               cc.Proxyset,
 				Provider:               cc.Provider,
-				SessionParamsHash:      cc.SessionParamsHash,
+				SessionParams:          cc.SessionParams,
 				SessionDurationMinutes: cc.SessionDurationMinutes,
 				Epoch:                  cc.Epoch,
 				UpstreamIp:             cc.UpstreamIP,
@@ -134,6 +140,7 @@ func (c *Client) SendConnectionClosed(cc ConnectionClosed) {
 				UploadBytes:            cc.UploadBytes,
 				DownloadBytes:          cc.DownloadBytes,
 				DurationMs:             cc.DurationMs,
+				SessionMeta:            cc.SessionMeta,
 			},
 		},
 	}
@@ -151,15 +158,14 @@ func (c *Client) SendEpochTransition(t EpochTransition) {
 		EventId: newEventID(),
 		Payload: &ingestv1.Event_EpochTransition{
 			EpochTransition: &ingestv1.EpochTransition{
-				SessionParamsHash: t.SessionParamsHash,
-				ParamsJson:        t.ParamsJSON,
-				Proxyset:          t.Proxyset,
-				Provider:          t.Provider,
-				PrevEpoch:         t.PrevEpoch,
-				NewEpoch:          t.NewEpoch,
-				PrevIp:            t.PrevIP,
-				NewIp:             t.NewIP,
-				StartReason:       t.StartReason,
+				SessionParams: t.SessionParams,
+				Proxyset:      t.Proxyset,
+				Provider:      t.Provider,
+				PrevEpoch:     t.PrevEpoch,
+				NewEpoch:      t.NewEpoch,
+				PrevIp:        t.PrevIP,
+				NewIp:         t.NewIP,
+				StartReason:   t.StartReason,
 			},
 		},
 	}

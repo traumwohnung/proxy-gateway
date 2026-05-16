@@ -21,13 +21,16 @@ const Time = z
 
 const Metric = z.enum(['connections', 'upload_bytes', 'download_bytes', 'total_bytes']);
 
-// Built-in column dimensions plus a JSON-extraction dimension that reaches
-// into session_params_dim.params_json via the canonical hash join.
+// Built-in column dimensions plus two JSON-extraction dimensions that reach
+// into session_params_dim via the session_hash join.
+//  - 'session_params' reads from params_json (drives session identity)
+//  - 'session_meta'   reads from meta_json   (informational, last-write-wins)
 const Dimension = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('proxyset'), as: z.string().optional() }),
   z.object({ kind: z.literal('provider'), as: z.string().optional() }),
   z.object({ kind: z.literal('close_reason'), as: z.string().optional() }),
-  z.object({ kind: z.literal('json'), key: JsonKey, as: z.string().optional() }),
+  z.object({ kind: z.literal('session_params'), key: JsonKey, as: z.string().optional() }),
+  z.object({ kind: z.literal('session_meta'), key: JsonKey, as: z.string().optional() }),
 ]);
 
 const ScalarValue = z.union([z.string(), z.number()]);
@@ -63,6 +66,12 @@ const Where = z
     session_params_in: z.array(JsonInPredicate).min(1).optional(),
     session_params_not_in: z.array(JsonInPredicate).min(1).optional(),
     session_params_has_key: z.array(JsonKey).min(1).optional(),
+
+    session_meta_eq: z.array(JsonPredicate).min(1).optional(),
+    session_meta_ne: z.array(JsonPredicate).min(1).optional(),
+    session_meta_in: z.array(JsonInPredicate).min(1).optional(),
+    session_meta_not_in: z.array(JsonInPredicate).min(1).optional(),
+    session_meta_has_key: z.array(JsonKey).min(1).optional(),
   })
   .strict();
 
@@ -108,18 +117,27 @@ export function dimName(d: Dimension): string {
       return 'provider';
     case 'close_reason':
       return 'close_reason';
-    case 'json':
+    case 'session_params':
+      return d.key;
+    case 'session_meta':
       return d.key;
   }
 }
 
 // dimRequiresDim returns true when this dimension/filter needs the dim-table
 // JOIN to be present in the rendered SQL.
-export function dimRequiresDim(d: Dimension): boolean {
-  return d.kind === 'json';
+// session_params and session_meta each live in their own dim table; each
+// dimension/predicate may require a separate JOIN. The renderer composes
+// the two flags independently.
+export function dimRequiresParamsDim(d: Dimension): boolean {
+  return d.kind === 'session_params';
 }
 
-export function whereRequiresDim(w?: Where): boolean {
+export function dimRequiresMetaDim(d: Dimension): boolean {
+  return d.kind === 'session_meta';
+}
+
+export function whereRequiresParamsDim(w?: Where): boolean {
   if (!w) return false;
   return Boolean(
     w.session_params_eq ||
@@ -127,6 +145,17 @@ export function whereRequiresDim(w?: Where): boolean {
       w.session_params_in ||
       w.session_params_not_in ||
       w.session_params_has_key,
+  );
+}
+
+export function whereRequiresMetaDim(w?: Where): boolean {
+  if (!w) return false;
+  return Boolean(
+    w.session_meta_eq ||
+      w.session_meta_ne ||
+      w.session_meta_in ||
+      w.session_meta_not_in ||
+      w.session_meta_has_key,
   );
 }
 

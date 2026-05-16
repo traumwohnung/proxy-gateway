@@ -1,6 +1,6 @@
 import { ProxyGatewayClient } from "./client";
 import { buildProxyUsername } from "./types";
-import type { AffinityParams } from "./types";
+import type { SessionMeta, SessionParams } from "./types";
 
 let _client: ProxyGatewayClient | null = null;
 
@@ -35,12 +35,18 @@ export function configureProxy(opts: ProxyConfig): void {
  * Throws if `configureProxy` has not been called, or if verification fails.
  *
  * @example
- * const username = await buildAndVerifyProxyUsername("residential", 60, { platform: "ka" });
+ * const username = await buildAndVerifyProxyUsername("residential", 60, { user: "alice" });
+ *
+ * // With informational meta:
+ * const username = await buildAndVerifyProxyUsername(
+ *   "residential", 60, { user: "alice" }, { tenant: "acme" },
+ * );
  */
 export async function buildAndVerifyProxyUsername(
     proxySet: string,
-    affinityMinutes: number,
-    affinity: AffinityParams,
+    minutes: number,
+    sessionParams: SessionParams,
+    sessionMeta?: SessionMeta,
 ): Promise<string> {
     if (!_client) {
         throw new Error(
@@ -48,13 +54,15 @@ export async function buildAndVerifyProxyUsername(
         );
     }
 
-    const username = buildProxyUsername({ proxySet, affinityMinutes, affinity });
+    const username = buildProxyUsername({ proxySet, minutes, sessionParams, sessionMeta });
     const result = await _client.verifyUsername(username);
 
     if (!result.ok) {
         throw new Error(
             `Proxy username verification failed: ${result.error ?? "unknown error"} ` +
-                `(set=${proxySet}, minutes=${affinityMinutes}, affinity=${JSON.stringify(affinity)})`,
+                `(set=${proxySet}, minutes=${minutes}, session_params=${JSON.stringify(sessionParams)}` +
+                (sessionMeta ? `, session_meta=${JSON.stringify(sessionMeta)}` : "") +
+                `)`,
         );
     }
 

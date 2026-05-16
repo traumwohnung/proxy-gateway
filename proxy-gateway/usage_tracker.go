@@ -43,7 +43,7 @@ func (t *UsageTracker) record(c connRecord, upload, download int64, reason strin
 		ConnectionID:           c.connectionID,
 		Proxyset:               c.proxyset,
 		Provider:               c.provider,
-		SessionParamsHash:      c.sessionParamsHash,
+		SessionParams:          c.sessionParams,
 		SessionDurationMinutes: int32(c.minutes),
 		Epoch:                  c.epoch,
 		UpstreamIP:             c.upstreamIP,
@@ -52,21 +52,23 @@ func (t *UsageTracker) record(c connRecord, upload, download int64, reason strin
 		UploadBytes:            upload,
 		DownloadBytes:          download,
 		DurationMs:             time.Since(c.startedAt).Milliseconds(),
+		SessionMeta:            c.sessionMeta,
 	})
 }
 
 // connRecord is the per-connection context the tracker needs at Close-time.
 // Populated by the trackUsage middleware when the connection is dialled.
 type connRecord struct {
-	connectionID      string
-	proxyset          string
-	provider          string
-	sessionParamsHash string
-	minutes           int
-	epoch             int32
-	upstreamIP        string
-	sni               string
-	startedAt         time.Time
+	connectionID  string
+	proxyset      string
+	provider      string
+	sessionParams string // canonical JSON
+	sessionMeta   string // canonical JSON; "{}" when none supplied
+	minutes       int
+	epoch         int32
+	upstreamIP    string
+	sni           string
+	startedAt     time.Time
 }
 
 // usageConnTracker records the final byte totals once when the connection
