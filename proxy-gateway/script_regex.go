@@ -6,7 +6,7 @@
 //
 //	DD = regex(rb'geo\.captcha-delivery\.com')
 //
-//	def bail(r):
+//	def response_bailing(r):
 //	    if DD.test(r.peek()):
 //	        return 'datadome'
 //

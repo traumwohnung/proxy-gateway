@@ -26,17 +26,17 @@ const (
 	// (with the bail chain disabled for the remaining stream).
 	DefaultReleaseCapBytes = 1024 * 1024
 
-	// HeaderBailScriptOutput carries the script's bail string when one in
+	// HeaderResponseBailingOutput carries the script's bail string when one in
 	// the chain returned one before any body was forwarded to the client.
-	HeaderBailScriptOutput = "X-Bail-Script-Output"
+	HeaderResponseBailingOutput = "X-Script-Response-Bailing-Output"
 
-	// HeaderBailScriptError carries the script's runtime error message when
+	// HeaderResponseBailingError carries the script's runtime error message when
 	// it raised before any body was forwarded to the client. The header is
 	// prefixed with the script name when more than one script is chained.
-	HeaderBailScriptError = "X-Bail-Script-Error"
+	HeaderResponseBailingError = "X-Script-Response-Bailing-Error"
 )
 
-// Apply runs each script's bail(r) in chain order against the streaming
+// ApplyResponseBailing runs each script's bail(r) in chain order against the streaming
 // upstream response and returns a (possibly transformed) *http.Response.
 // Status code is always preserved.
 //
@@ -51,14 +51,14 @@ const (
 //
 // chunkSize and releaseCap default to DefaultChunkBytes /
 // DefaultReleaseCapBytes when zero is passed.
-func Apply(ctx context.Context, chain []*Script, resp *http.Response, chunkSize, releaseCap int) *http.Response {
+func ApplyResponseBailing(ctx context.Context, chain []*Script, resp *http.Response, chunkSize, releaseCap int) *http.Response {
 	if resp == nil || resp.Body == nil || len(chain) == 0 {
 		return resp
 	}
 	// Filter the chain to scripts that actually define bail().
 	active := make([]*Script, 0, len(chain))
 	for _, s := range chain {
-		if s.HasBail() {
+		if s.HasResponseBailing() {
 			active = append(active, s)
 		}
 	}
@@ -123,7 +123,7 @@ func Apply(ctx context.Context, chain []*Script, resp *http.Response, chunkSize,
 	// Passthrough. Re-attach wrapper + surface any script errors via header.
 	resp.Body = bb
 	if len(scriptErrors) > 0 {
-		resp.Header.Set(HeaderBailScriptError, truncateForHeader(strings.Join(scriptErrors, " | ")))
+		resp.Header.Set(HeaderResponseBailingError, truncateForHeader(strings.Join(scriptErrors, " | ")))
 	}
 	return resp
 }
@@ -141,11 +141,11 @@ func callChain(ctx context.Context, scripts []*Script, disabled []bool, status i
 		if disabled[i] {
 			continue
 		}
-		r, err := s.CallBail(ctx, status, headers, peek)
+		r, err := s.CallResponseBailing(ctx, status, headers, peek)
 		if err != nil {
 			disabled[i] = true
 			errs = append(errs, fmt.Sprintf("%s: %s", s.name, err.Error()))
-			slog.Warn("bail script disabled for request after error",
+			slog.Warn("response_bailing script disabled for request after error",
 				"script", s.name, "err", err)
 			continue
 		}
@@ -166,12 +166,12 @@ func joinErrs(errs []string) string {
 func bailResponse(orig *http.Response, bb *bufferedBody, reason, bailedBy string, scriptErrors []string) *http.Response {
 	out := cloneRespShallow(orig)
 	out.Header = cloneHeadersWithoutEncoding(orig.Header)
-	out.Header.Set(HeaderBailScriptOutput, reason)
+	out.Header.Set(HeaderResponseBailingOutput, reason)
 	if bailedBy != "" {
-		out.Header.Set("X-Bail-Script-Name", bailedBy)
+		out.Header.Set("X-Script-Response-Bailing-Name", bailedBy)
 	}
 	if len(scriptErrors) > 0 {
-		out.Header.Set(HeaderBailScriptError, truncateForHeader(strings.Join(scriptErrors, " | ")))
+		out.Header.Set(HeaderResponseBailingError, truncateForHeader(strings.Join(scriptErrors, " | ")))
 	}
 	body := append([]byte(nil), bb.buf...)
 	out.Body = io.NopCloser(bytesReader(body))

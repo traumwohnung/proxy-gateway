@@ -82,7 +82,7 @@ func ParseUsername(raw string, registry ScriptRegistry) (*Username, error) {
 // resolveScriptList parses a JSON array whose entries are either:
 //   - a JSON string (reference to a named script in the registry)
 //   - an object {"ref": "name"} (same as string form)
-//   - an object {"source": "def bail(r): ..."} (inline source compiled now)
+//   - an object {"source": "def response_bailing(r): ..."} (inline source compiled now)
 //
 // Returns the ordered slice of *Script. inlineNamePrefix is used in the
 // compile-error context (e.g. "username" or "config:residential").

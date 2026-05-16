@@ -13,20 +13,20 @@ import (
 // ── Compile ────────────────────────────────────────────────────────────────
 
 func TestCompile_Happy(t *testing.T) {
-	if _, err := Compile("ok", `def bail(r): return None`); err != nil {
+	if _, err := Compile("ok", `def response_bailing(r): return None`); err != nil {
 		t.Fatalf("compile: %v", err)
 	}
 }
 
 func TestCompile_MissingBail(t *testing.T) {
 	_, err := Compile("nofn", `x = 1`)
-	if err == nil || !strings.Contains(err.Error(), "bail") {
+	if err == nil || !strings.Contains(err.Error(), "response_bailing") {
 		t.Fatalf("want missing-bail error, got %v", err)
 	}
 }
 
 func TestCompile_SyntaxError(t *testing.T) {
-	_, err := Compile("bad", `def bail(r):  ?? `)
+	_, err := Compile("bad", `def response_bailing(r):  ?? `)
 	if err == nil {
 		t.Fatal("want syntax error")
 	}
@@ -41,7 +41,7 @@ func TestCompile_TooLarge(t *testing.T) {
 }
 
 func TestCompile_NotCallable(t *testing.T) {
-	_, err := Compile("nc", `bail = 42`)
+	_, err := Compile("nc", `response_bailing = 42`)
 	if err == nil || !strings.Contains(err.Error(), "not callable") {
 		t.Fatalf("want not-callable error, got %v", err)
 	}
@@ -61,25 +61,25 @@ func runCall(t *testing.T, src string, buf []byte) (string, error) {
 		}
 		return buf[:n]
 	}
-	return s.CallBail(context.Background(), 200, nil, peek)
+	return s.CallResponseBailing(context.Background(), 200, nil, peek)
 }
 
 func TestCall_NoneContinues(t *testing.T) {
-	reason, err := runCall(t, `def bail(r): return None`, nil)
+	reason, err := runCall(t, `def response_bailing(r): return None`, nil)
 	if err != nil || reason != "" {
 		t.Fatalf("reason=%q err=%v", reason, err)
 	}
 }
 
 func TestCall_ImplicitNoneContinues(t *testing.T) {
-	reason, err := runCall(t, `def bail(r): pass`, nil)
+	reason, err := runCall(t, `def response_bailing(r): pass`, nil)
 	if err != nil || reason != "" {
 		t.Fatalf("reason=%q err=%v", reason, err)
 	}
 }
 
 func TestCall_StringBails(t *testing.T) {
-	reason, err := runCall(t, `def bail(r): return "datadome"`, nil)
+	reason, err := runCall(t, `def response_bailing(r): return "datadome"`, nil)
 	if err != nil {
 		t.Fatalf("err=%v", err)
 	}
@@ -89,7 +89,7 @@ func TestCall_StringBails(t *testing.T) {
 }
 
 func TestCall_RaisedErrorSurfaces(t *testing.T) {
-	reason, err := runCall(t, `def bail(r): fail("bad")`, nil)
+	reason, err := runCall(t, `def response_bailing(r): fail("bad")`, nil)
 	if err == nil {
 		t.Fatalf("want error, reason=%q", reason)
 	}
@@ -99,7 +99,7 @@ func TestCall_RaisedErrorSurfaces(t *testing.T) {
 }
 
 func TestCall_UnexpectedReturnTypeTreatedAsContinue(t *testing.T) {
-	reason, err := runCall(t, `def bail(r): return 42`, nil)
+	reason, err := runCall(t, `def response_bailing(r): return 42`, nil)
 	if err != nil || reason != "" {
 		t.Fatalf("expected continue, got reason=%q err=%v", reason, err)
 	}
@@ -108,7 +108,7 @@ func TestCall_UnexpectedReturnTypeTreatedAsContinue(t *testing.T) {
 func TestCall_PeekAndScan(t *testing.T) {
 	body := []byte("hello captcha-delivery.com middle")
 	reason, err := runCall(t, `
-def bail(r):
+def response_bailing(r):
     if r.scan(b"captcha-delivery.com") >= 0:
         return "datadome"
     return None
@@ -120,12 +120,12 @@ def bail(r):
 
 func TestCall_HeadersLowercased(t *testing.T) {
 	s, _ := Compile(t.Name(), `
-def bail(r):
+def response_bailing(r):
     if r.headers["content-type"] == ["text/html"]:
         return "is-html"
     return None
 `)
-	reason, err := s.CallBail(context.Background(), 200,
+	reason, err := s.CallResponseBailing(context.Background(), 200,
 		map[string][]string{"Content-Type": {"text/html"}},
 		func(int) []byte { return nil })
 	if err != nil || reason != "is-html" {
@@ -137,7 +137,7 @@ def bail(r):
 
 func TestCall_StepLimit_ReturnsError(t *testing.T) {
 	_, err := runCall(t, `
-def bail(r):
+def response_bailing(r):
     n = 0
     for _ in range(1000000):
         n += 1
@@ -150,7 +150,7 @@ def bail(r):
 
 func TestCall_ContextCancel_ReturnsError(t *testing.T) {
 	s, _ := Compile(t.Name(), `
-def bail(r):
+def response_bailing(r):
     n = 0
     for i in range(99999):
         n = n + i
@@ -158,7 +158,7 @@ def bail(r):
 `)
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { time.Sleep(5 * time.Millisecond); cancel() }()
-	_, err := s.CallBail(ctx, 200, nil, func(int) []byte { return nil })
+	_, err := s.CallResponseBailing(ctx, 200, nil, func(int) []byte { return nil })
 	if err == nil {
 		t.Fatal("want cancellation error")
 	}
@@ -221,7 +221,7 @@ type countingCloser struct {
 
 func (c *countingCloser) Close() error { c.onClose(); return nil }
 
-// ── Apply end-to-end ───────────────────────────────────────────────────────
+// ── ApplyResponseBailing end-to-end ───────────────────────────────────────────────────────
 
 func makeResp(body string) *http.Response {
 	return &http.Response{
@@ -247,16 +247,16 @@ func readAll(t *testing.T, body io.ReadCloser) string {
 }
 
 func TestApply_NoBail_DeliversFullBody(t *testing.T) {
-	s, _ := Compile("none", `def bail(r): return None`)
+	s, _ := Compile("none", `def response_bailing(r): return None`)
 	resp := makeResp("hello world")
-	got := Apply(context.Background(), []*Script{s}, resp, 0, 0)
+	got := ApplyResponseBailing(context.Background(), []*Script{s}, resp, 0, 0)
 	if got.StatusCode != 200 {
 		t.Fatalf("status %d", got.StatusCode)
 	}
 	if body := readAll(t, got.Body); body != "hello world" {
 		t.Fatalf("body=%q", body)
 	}
-	if got.Header.Get(HeaderBailScriptOutput) != "" {
+	if got.Header.Get(HeaderResponseBailingOutput) != "" {
 		t.Fatalf("unexpected bail header")
 	}
 }
@@ -272,21 +272,21 @@ func TestApply_Bail_StatusPreservedReasonHeaderAdded(t *testing.T) {
 		Header: http.Header{"Content-Type": {"text/html"}}, Body: upstream,
 	}
 	src := `
-def bail(r):
+def response_bailing(r):
     if r.scan(b"captcha-delivery.com") >= 0:
         return "datadome"
     return None
 `
 	s, _ := Compile("ab", src)
-	got := Apply(context.Background(), []*Script{s}, resp, 0, 0)
+	got := ApplyResponseBailing(context.Background(), []*Script{s}, resp, 0, 0)
 	if got.StatusCode != 403 {
 		t.Fatalf("status must be preserved, got %d", got.StatusCode)
 	}
 	if !closed {
 		t.Fatalf("upstream not closed")
 	}
-	if got.Header.Get(HeaderBailScriptOutput) != "datadome" {
-		t.Fatalf("X-Bail-Reason=%q", got.Header.Get(HeaderBailScriptOutput))
+	if got.Header.Get(HeaderResponseBailingOutput) != "datadome" {
+		t.Fatalf("X-Bail-Reason=%q", got.Header.Get(HeaderResponseBailingOutput))
 	}
 	// Body is what we received up to the bail point — at least the marker.
 	body := readAll(t, got.Body)
@@ -297,14 +297,14 @@ def bail(r):
 
 func TestApply_ScriptError_AddsHeaderAndContinues(t *testing.T) {
 	resp := makeResp("full body delivered intact")
-	src := `def bail(r): fail("boom")`
+	src := `def response_bailing(r): fail("boom")`
 	s, _ := Compile("bad", src)
-	got := Apply(context.Background(), []*Script{s}, resp, 0, 0)
+	got := ApplyResponseBailing(context.Background(), []*Script{s}, resp, 0, 0)
 	if got.StatusCode != 200 {
 		t.Fatalf("status %d", got.StatusCode)
 	}
-	if got.Header.Get(HeaderBailScriptError) == "" {
-		t.Fatalf("missing X-Bail-Script-Error header")
+	if got.Header.Get(HeaderResponseBailingError) == "" {
+		t.Fatalf("missing X-Script-Response-Bailing-Error header")
 	}
 	if body := readAll(t, got.Body); body != "full body delivered intact" {
 		t.Fatalf("body=%q (should pass through after error)", body)
@@ -318,9 +318,9 @@ func TestApply_BailLimitsUpstreamReads(t *testing.T) {
 	pulledBytes := 0
 	r := &readCounter{src: bytes.NewReader(upstream), n: &pulledBytes}
 	resp := &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(r)}
-	src := `def bail(r): return "immediate"`
+	src := `def response_bailing(r): return "immediate"`
 	s, _ := Compile("imm", src)
-	_ = Apply(context.Background(), []*Script{s}, resp, 8192, 0)
+	_ = ApplyResponseBailing(context.Background(), []*Script{s}, resp, 8192, 0)
 	if pulledBytes > 8192 {
 		t.Fatalf("pulled %d bytes, want ≤ initial chunk size (~8 KiB)", pulledBytes)
 	}
@@ -339,7 +339,7 @@ func (r *readCounter) Read(p []byte) (int, error) {
 
 func TestApply_NilScript_ReturnsResponseUnchanged(t *testing.T) {
 	resp := makeResp("noop")
-	got := Apply(context.Background(), nil, resp, 0, 0)
+	got := ApplyResponseBailing(context.Background(), nil, resp, 0, 0)
 	if got != resp {
 		t.Fatal("nil script should return same pointer")
 	}
@@ -353,15 +353,15 @@ func TestApply_BailOnLaterChunk(t *testing.T) {
 	full := chunk1 + chunk2
 	resp := makeResp(full)
 	src := `
-def bail(r):
+def response_bailing(r):
     if r.scan(b"captcha-delivery.com") >= 0:
         return "datadome"
     return None
 `
 	s, _ := Compile("late", src)
-	got := Apply(context.Background(), []*Script{s}, resp, 4096, 0)
-	if got.Header.Get(HeaderBailScriptOutput) != "datadome" {
-		t.Fatalf("expected later-chunk bail, header=%q", got.Header.Get(HeaderBailScriptOutput))
+	got := ApplyResponseBailing(context.Background(), []*Script{s}, resp, 4096, 0)
+	if got.Header.Get(HeaderResponseBailingOutput) != "datadome" {
+		t.Fatalf("expected later-chunk bail, header=%q", got.Header.Get(HeaderResponseBailingOutput))
 	}
 }
 
@@ -369,10 +369,10 @@ func TestApply_ReleaseCapWithoutDecision(t *testing.T) {
 	// Script always returns None; body exceeds cap → release with no headers.
 	full := strings.Repeat("y", 10*1024)
 	resp := makeResp(full)
-	s, _ := Compile("none", `def bail(r): return None`)
-	got := Apply(context.Background(), []*Script{s}, resp, 1024, 2048) // cap < body
-	if got.Header.Get(HeaderBailScriptOutput) != "" {
-		t.Fatalf("no bail expected, got %q", got.Header.Get(HeaderBailScriptOutput))
+	s, _ := Compile("none", `def response_bailing(r): return None`)
+	got := ApplyResponseBailing(context.Background(), []*Script{s}, resp, 1024, 2048) // cap < body
+	if got.Header.Get(HeaderResponseBailingOutput) != "" {
+		t.Fatalf("no bail expected, got %q", got.Header.Get(HeaderResponseBailingOutput))
 	}
 	// Should still deliver full body (buffered + remaining).
 	if body := readAll(t, got.Body); body != full {

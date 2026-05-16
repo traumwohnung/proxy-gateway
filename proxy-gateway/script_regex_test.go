@@ -15,7 +15,7 @@ func TestRegex_CompiledAtInitAndUsedInBail(t *testing.T) {
 	src := `
 DD = regex(rb'geo\.captcha-delivery\.com')
 
-def bail(r):
+def response_bailing(r):
     if DD.test(r.peek()):
         return 'datadome'
     return None
@@ -32,7 +32,7 @@ def bail(r):
 func TestRegex_NoMatch_ReturnsContinue(t *testing.T) {
 	src := `
 P = regex(rb'BLOCK')
-def bail(r):
+def response_bailing(r):
     if P.test(r.peek()):
         return 'block'
     return None
@@ -46,7 +46,7 @@ def bail(r):
 func TestRegex_AcceptsStringPattern(t *testing.T) {
 	src := `
 P = regex('foo|bar')
-def bail(r):
+def response_bailing(r):
     return 'hit' if P.test(r.peek()) else None
 `
 	reason, _ := runCall(t, src, []byte("the bar is open"))
@@ -58,7 +58,7 @@ def bail(r):
 func TestRegex_BadPatternFailsAtCompile(t *testing.T) {
 	src := `
 P = regex(rb'(unclosed')
-def bail(r): return None
+def response_bailing(r): return None
 `
 	_, err := Compile(t.Name(), src)
 	if err == nil || !strings.Contains(err.Error(), "regex") {
@@ -68,7 +68,7 @@ def bail(r): return None
 
 func TestRegex_OversizedPatternFailsAtCompile(t *testing.T) {
 	big := strings.Repeat("a", MaxRegexPatternSize+1)
-	src := "P = regex(b'" + big + "')\ndef bail(r): return None\n"
+	src := "P = regex(b'" + big + "')\ndef response_bailing(r): return None\n"
 	_, err := Compile(t.Name(), src)
 	if err == nil || !strings.Contains(err.Error(), "exceeds limit") {
 		t.Fatalf("want size error, got %v", err)
@@ -80,7 +80,7 @@ func TestRegex_OversizedPatternFailsAtCompile(t *testing.T) {
 func TestRegex_SearchReturnsOffset(t *testing.T) {
 	src := `
 P = regex(rb'needle')
-def bail(r):
+def response_bailing(r):
     idx = P.search(r.peek())
     return str(idx)
 `
@@ -93,7 +93,7 @@ def bail(r):
 func TestRegex_SearchReturnsMinus1OnMiss(t *testing.T) {
 	src := `
 P = regex(rb'absent')
-def bail(r):
+def response_bailing(r):
     return str(P.search(r.peek()))
 `
 	reason, _ := runCall(t, src, []byte("nothing here"))
@@ -105,7 +105,7 @@ def bail(r):
 func TestRegex_SearchHonoursStart(t *testing.T) {
 	src := `
 P = regex(rb'aa')
-def bail(r):
+def response_bailing(r):
     # first match at 0, but we skip it
     return str(P.search(r.peek(), 1))
 `
@@ -120,7 +120,7 @@ def bail(r):
 func TestRegex_FindReturnsMatchedBytes(t *testing.T) {
 	src := `
 P = regex(rb'"id":"[A-Z]+"')
-def bail(r):
+def response_bailing(r):
     m = P.find(r.peek())
     if m == None:
         return None
@@ -136,7 +136,7 @@ def bail(r):
 func TestRegex_FindReturnsNoneOnMiss(t *testing.T) {
 	src := `
 P = regex(rb'absent')
-def bail(r):
+def response_bailing(r):
     m = P.find(r.peek())
     return 'none' if m == None else 'hit'
 `
@@ -149,7 +149,7 @@ def bail(r):
 func TestRegex_FindAllReturnsList(t *testing.T) {
 	src := `
 P = regex(rb'\d+')
-def bail(r):
+def response_bailing(r):
     ms = P.find_all(r.peek())
     return str(len(ms))
 `
@@ -172,15 +172,15 @@ func TestApply_RegexBailOnLaterChunk(t *testing.T) {
 	}
 	src := `
 MARKER = regex(rb'__UFRN_LIFECYCLE_SERVERREQUEST__')
-def bail(r):
+def response_bailing(r):
     if MARKER.test(r.peek()):
         return 'have_blob'
     return None
 `
 	s, _ := Compile("late", src)
-	got := Apply(context.Background(), []*Script{s}, resp, 4096, 0)
-	if got.Header.Get(HeaderBailScriptOutput) != "have_blob" {
-		t.Fatalf("header=%q", got.Header.Get(HeaderBailScriptOutput))
+	got := ApplyResponseBailing(context.Background(), []*Script{s}, resp, 4096, 0)
+	if got.Header.Get(HeaderResponseBailingOutput) != "have_blob" {
+		t.Fatalf("header=%q", got.Header.Get(HeaderResponseBailingOutput))
 	}
 }
 
@@ -191,7 +191,7 @@ func TestRegex_NoCatastrophicBacktracking(t *testing.T) {
 	// linear-time guarantee means this completes quickly.
 	src := `
 P = regex(rb'(a+)+b')
-def bail(r):
+def response_bailing(r):
     return 'hit' if P.test(r.peek()) else 'miss'
 `
 	hay := bytes.Repeat([]byte("a"), 5000)

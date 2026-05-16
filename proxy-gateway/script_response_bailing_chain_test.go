@@ -15,7 +15,7 @@ import (
 
 // ── ParseUsername: scripts array ───────────────────────────────────────────
 
-const validInline = `{"source":"def bail(r): return None"}`
+const validInline = `{"source":"def response_bailing(r): return None"}`
 
 func TestParseUsername_InlineScriptCompiled(t *testing.T) {
 	raw := `{"set":"res","httpcloak":{"preset":"chrome-latest"},"scripts":[` + validInline + `]}`
@@ -23,7 +23,7 @@ func TestParseUsername_InlineScriptCompiled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if len(u.Scripts) != 1 || !u.Scripts[0].HasBail() {
+	if len(u.Scripts) != 1 || !u.Scripts[0].HasResponseBailing() {
 		t.Fatalf("want 1 script with bail, got %+v", u.Scripts)
 	}
 }
@@ -45,7 +45,7 @@ func TestParseUsername_RefWithoutRegistryErrors(t *testing.T) {
 }
 
 func TestParseUsername_RefResolvesViaRegistry(t *testing.T) {
-	s, _ := Compile("antibot", `def bail(r): return None`)
+	s, _ := Compile("antibot", `def response_bailing(r): return None`)
 	reg := scriptMap{"antibot": s}
 	raw := `{"set":"res","httpcloak":{"preset":"chrome-latest"},"scripts":["antibot"]}`
 	u, err := ParseUsername(raw, reg)
@@ -67,7 +67,7 @@ func TestParseUsername_UnknownRefErrors(t *testing.T) {
 }
 
 func TestParseUsername_MixedRefAndInline(t *testing.T) {
-	s, _ := Compile("a", `def bail(r): return None`)
+	s, _ := Compile("a", `def response_bailing(r): return None`)
 	reg := scriptMap{"a": s}
 	raw := `{"set":"res","httpcloak":{"preset":"chrome-latest"},"scripts":["a",` + validInline + `,{"ref":"a"}]}`
 	u, err := ParseUsername(raw, reg)
@@ -80,7 +80,7 @@ func TestParseUsername_MixedRefAndInline(t *testing.T) {
 }
 
 func TestParseUsername_RefAndSourceTogetherErrors(t *testing.T) {
-	raw := `{"set":"res","httpcloak":{"preset":"chrome-latest"},"scripts":[{"ref":"x","source":"def bail(r): return None"}]}`
+	raw := `{"set":"res","httpcloak":{"preset":"chrome-latest"},"scripts":[{"ref":"x","source":"def response_bailing(r): return None"}]}`
 	_, err := ParseUsername(raw, scriptMap{})
 	if err == nil || !strings.Contains(err.Error(), "exactly one of") {
 		t.Fatalf("want exactly-one-of error, got %v", err)
@@ -101,7 +101,7 @@ func TestParseUsername_EmptyScriptsArrayIsOK(t *testing.T) {
 // ── ParseJSONCreds: context propagation ────────────────────────────────────
 
 func TestParseJSONCreds_PutsScriptsOnContext(t *testing.T) {
-	s, _ := Compile("antibot", `def bail(r): return None`)
+	s, _ := Compile("antibot", `def response_bailing(r): return None`)
 	reg := scriptMap{"antibot": s}
 	var seen []*Script
 	h := ParseJSONCreds(reg, proxykit.HandlerFunc(func(ctx context.Context, _ *proxykit.Request) (*proxykit.Result, error) {
@@ -135,7 +135,7 @@ func TestLoadConfig_CompilesNamedScripts(t *testing.T) {
 	body := `
 [[script]]
 name = "antibot"
-source = "def bail(r): return None"
+source = "def response_bailing(r): return None"
 
 [[proxy_set]]
 name = "res"
@@ -174,11 +174,11 @@ func TestLoadConfig_DuplicateNameFails(t *testing.T) {
 	body := `
 [[script]]
 name = "dup"
-source = "def bail(r): return None"
+source = "def response_bailing(r): return None"
 
 [[script]]
 name = "dup"
-source = "def bail(r): return None"
+source = "def response_bailing(r): return None"
 `
 	_, path := writeConfig(t, body)
 	if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "duplicate") {
@@ -206,7 +206,7 @@ func TestBuildServer_PerSetDefaultInstallsHook(t *testing.T) {
 [[script]]
 name = "antibot"
 source = """
-def bail(r):
+def response_bailing(r):
     if r.scan(b'BLOCK') >= 0:
         return 'blocked'
     return None
@@ -239,8 +239,8 @@ default_scripts = ["antibot"]
 		StatusCode: 200, Header: http.Header{},
 		Body: io.NopCloser(bytes.NewReader([]byte("xxBLOCKxx"))),
 	})
-	if hooked.Header.Get(HeaderBailScriptOutput) != "blocked" {
-		t.Fatalf("header=%q", hooked.Header.Get(HeaderBailScriptOutput))
+	if hooked.Header.Get(HeaderResponseBailingOutput) != "blocked" {
+		t.Fatalf("header=%q", hooked.Header.Get(HeaderResponseBailingOutput))
 	}
 }
 
@@ -248,7 +248,7 @@ func TestBuildServer_PerCallChainOverridesPerSet(t *testing.T) {
 	body := `
 [[script]]
 name = "ignore"
-source = "def bail(r): return None"
+source = "def response_bailing(r): return None"
 
 [[proxy_set]]
 name = "res"
@@ -259,7 +259,7 @@ default_scripts = ["ignore"]
 	cfg, _ := LoadConfig(path)
 	srv, _ := BuildServer(cfg, dir, "", nil)
 
-	override := `{"source":"def bail(r): return 'override'"}`
+	override := `{"source":"def response_bailing(r): return 'override'"}`
 	raw := `{"set":"res","httpcloak":{"preset":"chrome-latest"},"scripts":[` + override + `]}`
 	result, err := srv.Pipeline.Resolve(context.Background(), &proxykit.Request{RawUsername: raw})
 	if err != nil {
@@ -269,46 +269,46 @@ default_scripts = ["ignore"]
 		StatusCode: 200, Header: http.Header{},
 		Body: io.NopCloser(bytes.NewReader([]byte("anything"))),
 	})
-	if hooked.Header.Get(HeaderBailScriptOutput) != "override" {
-		t.Fatalf("override did not fire: header=%q", hooked.Header.Get(HeaderBailScriptOutput))
+	if hooked.Header.Get(HeaderResponseBailingOutput) != "override" {
+		t.Fatalf("override did not fire: header=%q", hooked.Header.Get(HeaderResponseBailingOutput))
 	}
 }
 
 // ── Chain ordering: first bail wins ───────────────────────────────────────
 
 func TestApply_ChainFirstBailWins(t *testing.T) {
-	first, _ := Compile("first", `def bail(r): return 'first'`)
-	second, _ := Compile("second", `def bail(r): return 'second'`)
+	first, _ := Compile("first", `def response_bailing(r): return 'first'`)
+	second, _ := Compile("second", `def response_bailing(r): return 'second'`)
 	resp := &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader([]byte("body")))}
-	got := Apply(context.Background(), []*Script{first, second}, resp, 0, 0)
-	if got.Header.Get(HeaderBailScriptOutput) != "first" {
-		t.Fatalf("want first, got %q", got.Header.Get(HeaderBailScriptOutput))
+	got := ApplyResponseBailing(context.Background(), []*Script{first, second}, resp, 0, 0)
+	if got.Header.Get(HeaderResponseBailingOutput) != "first" {
+		t.Fatalf("want first, got %q", got.Header.Get(HeaderResponseBailingOutput))
 	}
-	if got.Header.Get("X-Bail-Script-Name") != "first" {
-		t.Fatalf("want bailed-by=first, got %q", got.Header.Get("X-Bail-Script-Name"))
+	if got.Header.Get("X-Script-Response-Bailing-Name") != "first" {
+		t.Fatalf("want bailed-by=first, got %q", got.Header.Get("X-Script-Response-Bailing-Name"))
 	}
 }
 
 func TestApply_ChainSkipsNoneReturners(t *testing.T) {
-	noop, _ := Compile("noop", `def bail(r): return None`)
-	hit, _ := Compile("hit", `def bail(r): return 'hit'`)
+	noop, _ := Compile("noop", `def response_bailing(r): return None`)
+	hit, _ := Compile("hit", `def response_bailing(r): return 'hit'`)
 	resp := &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader([]byte("body")))}
-	got := Apply(context.Background(), []*Script{noop, hit}, resp, 0, 0)
-	if got.Header.Get(HeaderBailScriptOutput) != "hit" {
-		t.Fatalf("want hit, got %q", got.Header.Get(HeaderBailScriptOutput))
+	got := ApplyResponseBailing(context.Background(), []*Script{noop, hit}, resp, 0, 0)
+	if got.Header.Get(HeaderResponseBailingOutput) != "hit" {
+		t.Fatalf("want hit, got %q", got.Header.Get(HeaderResponseBailingOutput))
 	}
 }
 
 func TestApply_ChainErroringScriptDisabledLaterScriptStillRuns(t *testing.T) {
-	bad, _ := Compile("bad", `def bail(r): fail("boom")`)
-	hit, _ := Compile("hit", `def bail(r): return 'hit'`)
+	bad, _ := Compile("bad", `def response_bailing(r): fail("boom")`)
+	hit, _ := Compile("hit", `def response_bailing(r): return 'hit'`)
 	resp := &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader([]byte("body")))}
-	got := Apply(context.Background(), []*Script{bad, hit}, resp, 0, 0)
-	if got.Header.Get(HeaderBailScriptOutput) != "hit" {
-		t.Fatalf("want hit, got %q", got.Header.Get(HeaderBailScriptOutput))
+	got := ApplyResponseBailing(context.Background(), []*Script{bad, hit}, resp, 0, 0)
+	if got.Header.Get(HeaderResponseBailingOutput) != "hit" {
+		t.Fatalf("want hit, got %q", got.Header.Get(HeaderResponseBailingOutput))
 	}
-	if !strings.Contains(got.Header.Get(HeaderBailScriptError), "bad:") {
-		t.Fatalf("want error header with bad: prefix, got %q", got.Header.Get(HeaderBailScriptError))
+	if !strings.Contains(got.Header.Get(HeaderResponseBailingError), "bad:") {
+		t.Fatalf("want error header with bad: prefix, got %q", got.Header.Get(HeaderResponseBailingError))
 	}
 }
 

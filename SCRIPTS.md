@@ -3,14 +3,14 @@
 Server-side hooks for the proxy-gateway, written in Starlark. A request can
 carry an ordered **chain** of scripts; each script is a small Starlark
 module that may define one or more known entry-point functions. Today the
-only recognised entry point is `bail(r)`. Future ones (e.g.
+only recognised entry point is `response_bailing(r)`. Future ones (e.g.
 `request_modify(req)`, `response_modify(resp)`) will land alongside it.
 
 This guide focuses on bail — the current capability.
 
 ## What bail can do
 
-`bail(r)` answers one question after the gateway has buffered each new
+`response_bailing(r)` answers one question after the gateway has buffered each new
 chunk of upstream data on a MITM'd response:
 
 > "Should we close the upstream connection now?"
@@ -39,7 +39,7 @@ name = "antibot"
 source = """
 DD = regex(rb'(?:geo\\.captcha-delivery\\.com|datadome\\.cid)')
 
-def bail(r):
+def response_bailing(r):
     if DD.test(r.peek()):
         return 'datadome'
 """
@@ -47,7 +47,7 @@ def bail(r):
 [[script]]
 name = "skip_large"
 source = """
-def bail(r):
+def response_bailing(r):
     cl = int(r.headers.get('content-length', ['0'])[0])
     if cl > 1_000_000:
         return 'too_big'
@@ -76,7 +76,7 @@ default_scripts = ["antibot", "skip_large"]
   "httpcloak":      { "preset": "chrome-latest" },
   "scripts": [
     "antibot",
-    { "source": "def bail(r):\n    if r.scan(b'<title>') >= 0:\n        return 'has_title'" },
+    { "source": "def response_bailing(r):\n    if r.scan(b'<title>') >= 0:\n        return 'has_title'" },
     { "ref": "skip_large" }
   ]
 }
@@ -88,7 +88,7 @@ Each entry is one of:
 | ----------------------------- | -------------------------------------------------------------- |
 | `"name"`                      | Reference to a `[[script]]` named `name` in config             |
 | `{"ref": "name"}`             | Same as above, just explicit                                   |
-| `{"source": "def bail(r): …"}`| Inline Starlark, compiled at username parse                    |
+| `{"source": "def response_bailing(r): …"}`| Inline Starlark, compiled at username parse                    |
 
 - Inline source ≤ 32 KiB, same compile rules as named scripts.
 - Refs require a registry — username parsing fails if a ref appears with
@@ -100,11 +100,11 @@ Each entry is one of:
 ## Lifecycle of the bail chain
 
 1. Upstream returns response headers + starts producing body.
-2. For each script in the chain, in order, invoke its `bail(r)` with
+2. For each script in the chain, in order, invoke its `response_bailing(r)` with
    headers visible and the body buffer still empty.
 3. If any script returns a string → close upstream, finalise response,
-   attach `X-Bail-Script-Output: <string>` and `X-Bail-Script-Name: <name>`.
-4. If any script raises → log, attach error to `X-Bail-Script-Error`,
+   attach `X-Script-Response-Bailing-Output: <string>` and `X-Script-Response-Bailing-Name: <name>`.
+4. If any script raises → log, attach error to `X-Script-Response-Bailing-Error`,
    mark **only that script** disabled for the rest of the request.
    Subsequent scripts in the chain continue to run.
 5. If no script bails in this round, pull the next chunk (8 KiB default)
@@ -126,15 +126,15 @@ all scripts in order regardless of bail.
 | `r.peek(n=None)`           | `bytes`                          | Buffered body so far (`None` = all)                |
 | `r.scan(needle, start=0)`  | `int` (-1 if not found)          | Byte-substring search; convenience over `peek`     |
 
-## Return contract for `bail(r)`
+## Return contract for `response_bailing(r)`
 
 | Return value                       | Effect                                                                                         |
 | ---------------------------------- | ---------------------------------------------------------------------------------------------- |
 | `None` (or no return)              | Continue. Next script in chain runs. If last, gateway pulls next chunk.                        |
-| Non-empty `str`                    | Bail. Close upstream. Add `X-Bail-Script-Output: <string>` + `X-Bail-Script-Name: <script>`.   |
+| Non-empty `str`                    | Bail. Close upstream. Add `X-Script-Response-Bailing-Output: <string>` + `X-Script-Response-Bailing-Name: <script>`.   |
 | Empty `""`                         | Same as `None` (continue).                                                                     |
 | Any other type (int, list, bytes…) | Treated as continue. A warning is logged on the gateway.                                       |
-| Raised exception (`fail(...)`, …)  | Add to `X-Bail-Script-Error`. Script disabled for the rest of this request. Chain continues.   |
+| Raised exception (`fail(...)`, …)  | Add to `X-Script-Response-Bailing-Error`. Script disabled for the rest of this request. Chain continues.   |
 
 ## Predeclared host builtins
 
@@ -147,7 +147,7 @@ guaranteed.
 ```python
 DD = regex(rb'geo\.captcha-delivery\.com')
 
-def bail(r):
+def response_bailing(r):
     if DD.test(r.peek()):
         return 'datadome'
 ```
@@ -170,7 +170,7 @@ Inputs accept both `bytes` and `str`. Patterns capped at 4 KiB.
 ```python
 ANTIBOT = regex(rb'(?:geo\.captcha-delivery\.com|datadome\.cid|__cf_bm|<title>\s*Just a moment)')
 
-def bail(r):
+def response_bailing(r):
     if ANTIBOT.test(r.peek()):
         return 'antibot'
 ```
@@ -178,7 +178,7 @@ def bail(r):
 ### Bail on 4xx without reading the body
 
 ```python
-def bail(r):
+def response_bailing(r):
     if 400 <= r.status < 500:
         return 'client_error'
 ```
@@ -186,7 +186,7 @@ def bail(r):
 ### Bail on huge Content-Length before reading anything
 
 ```python
-def bail(r):
+def response_bailing(r):
     cl = int(r.headers.get('content-length', ['0'])[0])
     if cl > 5_000_000:
         return 'too_big'
@@ -197,7 +197,7 @@ def bail(r):
 ```python
 END = regex(rb'window\["__UFRN_LIFECYCLE_SERVERREQUEST__"\]=JSON\.parse\("[^"]*"\)')
 
-def bail(r):
+def response_bailing(r):
     if END.test(r.peek()):
         return 'have_blob'
 ```
@@ -211,7 +211,7 @@ MARKERS = {
     'perimeterx':  regex(rb'PerimeterX'),
 }
 
-def bail(r):
+def response_bailing(r):
     buf = r.peek()
     for name, pat in MARKERS.items():
         if pat.test(buf):
@@ -225,13 +225,13 @@ def bail(r):
 ```toml
 [[script]]
 name = "skip_4xx"
-source = "def bail(r): return 'client_error' if 400 <= r.status < 500 else None"
+source = "def response_bailing(r): return 'client_error' if 400 <= r.status < 500 else None"
 
 [[script]]
 name = "antibot_full_html_scan"
 source = """
 ANTIBOT = regex(rb'(?:datadome|cf-chl-bypass|PerimeterX){1,3}')
-def bail(r):
+def response_bailing(r):
     if ANTIBOT.test(r.peek()):
         return 'antibot'
 """
@@ -250,7 +250,7 @@ bails, the heavier regex scan never runs.
 ```json
 "scripts": [
   "antibot",
-  { "source": "def bail(r):\n    if r.scan(b'<error>') >= 0:\n        return 'error_marker'" }
+  { "source": "def response_bailing(r):\n    if r.scan(b'<error>') >= 0:\n        return 'error_marker'" }
 ]
 ```
 
@@ -273,9 +273,9 @@ bails, the heavier regex scan never runs.
 
 | Header                    | When                                                                              |
 | ------------------------- | --------------------------------------------------------------------------------- |
-| `X-Bail-Script-Output`    | Some script in the chain returned a non-empty string.                             |
-| `X-Bail-Script-Name`      | Name of the script that bailed (matches the `[[script]]` `name` or `username[N]`).|
-| `X-Bail-Script-Error`     | One or more scripts raised before the response was released. Format: `name: msg`, joined by ` \| ` when multiple errored. |
+| `X-Script-Response-Bailing-Output`    | Some script in the chain returned a non-empty string.                             |
+| `X-Script-Response-Bailing-Name`      | Name of the script that bailed (matches the `[[script]]` `name` or `username[N]`).|
+| `X-Script-Response-Bailing-Error`     | One or more scripts raised before the response was released. Format: `name: msg`, joined by ` \| ` when multiple errored. |
 
 ## Operational limits
 

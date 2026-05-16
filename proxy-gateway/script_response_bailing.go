@@ -23,16 +23,16 @@ import (
 )
 
 // Script is a compiled Starlark module that may define any combination of
-// the recognised entry points. Inspect HasBail() etc. before dispatching.
+// the recognised entry points. Inspect HasResponseBailing() etc. before dispatching.
 type Script struct {
 	name string
-	bail starlark.Value // nil if not defined
+	responseBailing starlark.Value // nil if not defined
 }
 
 // recognisedEntryPoints lists every entry function name the gateway knows
 // about. Adding a new function type (e.g. "response_modify") means: add it
 // here, add a typed field on Script, and add a Call* method.
-var recognisedEntryPoints = []string{"bail"}
+var recognisedEntryPoints = []string{"response_bailing"}
 
 // Compile parses and validates a script source. At least one recognised
 // entry point must be defined; otherwise the script can't do anything and
@@ -52,8 +52,8 @@ func Compile(name, src string) (*Script, error) {
 			return nil, fmt.Errorf("script %q: %s is not callable", name, ep)
 		}
 		switch ep {
-		case "bail":
-			s.bail = fn
+		case "response_bailing":
+			s.responseBailing = fn
 		}
 	}
 	if s.empty() {
@@ -64,25 +64,25 @@ func Compile(name, src string) (*Script, error) {
 }
 
 func (s *Script) empty() bool {
-	return s.bail == nil
+	return s.responseBailing == nil
 }
 
-// HasBail reports whether the script defines a bail(r) function.
-func (s *Script) HasBail() bool { return s != nil && s.bail != nil }
+// HasResponseBailing reports whether the script defines a bail(r) function.
+func (s *Script) HasResponseBailing() bool { return s != nil && s.responseBailing != nil }
 
-// CallBail invokes bail() once with a fresh response handle. Outcomes:
+// CallResponseBailing invokes bail() once with a fresh response handle. Outcomes:
 //
 //   - reason != "":  bail with that reason.
 //   - err != nil:    script raised / timed out / blew the step budget.
 //   - reason == "" && err == nil: continue.
 //
 // Any non-None / non-string return is treated as continue plus a warning log.
-func (s *Script) CallBail(ctx context.Context, status int, headers map[string][]string, peek PeekFunc) (reason string, err error) {
-	if s == nil || s.bail == nil {
+func (s *Script) CallResponseBailing(ctx context.Context, status int, headers map[string][]string, peek PeekFunc) (reason string, err error) {
+	if s == nil || s.responseBailing == nil {
 		return "", nil
 	}
 	handle := &responseHandle{status: status, headers: headers, peek: peek}
-	ret, callErr := runCallable(ctx, s.name, "bail", s.bail, handle)
+	ret, callErr := runCallable(ctx, s.name, "response_bailing", s.responseBailing, handle)
 	if callErr != nil {
 		return "", callErr
 	}
@@ -92,7 +92,7 @@ func (s *Script) CallBail(ctx context.Context, status int, headers map[string][]
 	case starlark.String:
 		return string(v), nil
 	default:
-		slog.Warn("bail script returned unexpected type, treating as continue",
+		slog.Warn("response_bailing script returned unexpected type, treating as continue",
 			"script", s.name, "type", ret.Type())
 		return "", nil
 	}
