@@ -1,4 +1,4 @@
-import type { UsageQuery, Dimension, Metric } from '../../db/query.js';
+import type { Dimension, Metric, UsageQuery } from '../../db/query.js';
 
 const METRICS: Metric[] = ['connections', 'upload_bytes', 'download_bytes', 'total_bytes'];
 
@@ -14,8 +14,10 @@ export function defaultQuery(): UsageQuery {
 export function parseQuery(params: URLSearchParams): UsageQuery {
   const q: UsageQuery = defaultQuery();
 
-  const from = Number(params.get('from')); if (Number.isFinite(from) && from > 0) q.time.from = from;
-  const to   = Number(params.get('to'));   if (Number.isFinite(to)   && to   > 0) q.time.to   = to;
+  const from = Number(params.get('from'));
+  if (Number.isFinite(from) && from > 0) q.time.from = from;
+  const to = Number(params.get('to'));
+  if (Number.isFinite(to) && to > 0) q.time.to = to;
 
   const ru = params.get('res_unit');
   const rv = Number(params.get('res_value'));
@@ -32,11 +34,13 @@ export function parseQuery(params: URLSearchParams): UsageQuery {
   const proxysetEq = params.get('proxyset_eq');
   if (proxysetEq) where.proxyset_eq = proxysetEq;
   const sdGte = Number(params.get('session_duration_gte'));
-  if (Number.isFinite(sdGte) && params.has('session_duration_gte')) where.session_duration_gte = sdGte;
+  if (Number.isFinite(sdGte) && params.has('session_duration_gte'))
+    where.session_duration_gte = sdGte;
   const sdLte = Number(params.get('session_duration_lte'));
-  if (Number.isFinite(sdLte) && params.has('session_duration_lte')) where.session_duration_lte = sdLte;
+  if (Number.isFinite(sdLte) && params.has('session_duration_lte'))
+    where.session_duration_lte = sdLte;
 
-  const spEq = params.getAll('session_params_eq');     // each "key:value"
+  const spEq = params.getAll('session_params_eq'); // each "key:value"
   if (spEq.length) {
     where.session_params_eq = spEq.map((s) => {
       const i = s.indexOf(':');
@@ -48,21 +52,21 @@ export function parseQuery(params: URLSearchParams): UsageQuery {
 
   if (Object.keys(where).length) q.where = where;
 
-  const groups = params.getAll('group');               // "proxyset" | "provider" | "close_reason" | "json:<key>"
+  const groups = params.getAll('group'); // "proxyset" | "provider" | "close_reason" | "json:<key>"
   if (groups.length) {
     q.group_by = groups.map<Dimension>((g) => {
-      if (g === 'proxyset')     return { kind: 'proxyset' };
-      if (g === 'provider')     return { kind: 'provider' };
+      if (g === 'proxyset') return { kind: 'proxyset' };
+      if (g === 'provider') return { kind: 'provider' };
       if (g === 'close_reason') return { kind: 'close_reason' };
       return { kind: 'json', key: g.replace(/^json:/, '') };
     });
   }
 
-  const sortBy  = params.get('sort_by');
+  const sortBy = params.get('sort_by');
   const sortDir = params.get('sort_dir');
   if (sortBy || sortDir) {
     q.sort = {
-      by:  sortBy ?? 'metric',
+      by: sortBy ?? 'metric',
       dir: sortDir === 'asc' ? 'asc' : 'desc',
     };
   }
@@ -76,25 +80,25 @@ export function parseQuery(params: URLSearchParams): UsageQuery {
 export function serializeQuery(q: UsageQuery): URLSearchParams {
   const p = new URLSearchParams();
   p.set('from', String(q.time.from));
-  p.set('to',   String(q.time.to));
+  p.set('to', String(q.time.to));
   if (q.time.resolution) {
-    p.set('res_unit',  q.time.resolution.unit);
+    p.set('res_unit', q.time.resolution.unit);
     p.set('res_value', String(q.time.resolution.value));
   } else {
     p.set('res_unit', 'none');
   }
   p.set('metric', q.metric);
   const w = q.where ?? {};
-  if (w.proxyset_eq)          p.set('proxyset_eq', w.proxyset_eq);
+  if (w.proxyset_eq) p.set('proxyset_eq', w.proxyset_eq);
   if (w.session_duration_gte != null) p.set('session_duration_gte', String(w.session_duration_gte));
   if (w.session_duration_lte != null) p.set('session_duration_lte', String(w.session_duration_lte));
-  for (const e of w.session_params_eq ?? [])      p.append('session_params_eq', `${e.key}:${e.value}`);
+  for (const e of w.session_params_eq ?? []) p.append('session_params_eq', `${e.key}:${e.value}`);
   for (const k of w.session_params_has_key ?? []) p.append('session_params_has_key', k);
   for (const d of q.group_by ?? []) {
     p.append('group', d.kind === 'json' ? `json:${d.key}` : d.kind);
   }
   if (q.sort) {
-    p.set('sort_by',  q.sort.by);
+    p.set('sort_by', q.sort.by);
     p.set('sort_dir', q.sort.dir);
   }
   if (q.limit) p.set('limit', String(q.limit));

@@ -1,18 +1,19 @@
 import { sql } from './client.js';
 import {
+  type Dimension,
   dimName,
   dimRequiresDim,
-  whereRequiresDim,
-  type UsageQuery as UsageQuery_,
-  type Dimension,
   type Metric,
+  type UsageQuery as UsageQuery_,
   type Where as Where_,
+  whereRequiresDim,
 } from './query-schema.js';
+
 type UsageQuery = UsageQuery_;
 type Where = Where_;
 
+export type { Dimension, Metric, QueryError, Where } from './query-schema.js';
 export { UsageQuery, validate } from './query-schema.js';
-export type { Dimension, Metric, Where, QueryError } from './query-schema.js';
 
 // ---------------------------------------------------------------------------
 // SQL rendering for the analytics dashboard.
@@ -28,10 +29,10 @@ export type { Dimension, Metric, Where, QueryError } from './query-schema.js';
 // DuckDB's json_extract_string.
 // ---------------------------------------------------------------------------
 
-const UNIT_SECONDS: Record<'minute'|'hour'|'day', number> = {
+const UNIT_SECONDS: Record<'minute' | 'hour' | 'day', number> = {
   minute: 60,
-  hour:   3600,
-  day:    86400,
+  hour: 3600,
+  day: 86400,
 };
 
 function quoteStr(s: string): string {
@@ -48,19 +49,27 @@ function quoteScalar(v: string | number): string {
 
 function dimExpr(d: Dimension): string {
   switch (d.kind) {
-    case 'proxyset':     return 'cc.proxyset';
-    case 'provider':     return 'cc.provider';
-    case 'close_reason': return 'cc.close_reason';
-    case 'json':         return `json_extract_string(dim.params_json, '$.${d.key}')`;
+    case 'proxyset':
+      return 'cc.proxyset';
+    case 'provider':
+      return 'cc.provider';
+    case 'close_reason':
+      return 'cc.close_reason';
+    case 'json':
+      return `json_extract_string(dim.params_json, '$.${d.key}')`;
   }
 }
 
 function metricExpr(m: Metric): string {
   switch (m) {
-    case 'connections':    return 'COUNT(*)';
-    case 'upload_bytes':   return 'SUM(CAST(cc.upload_bytes AS DOUBLE))';
-    case 'download_bytes': return 'SUM(CAST(cc.download_bytes AS DOUBLE))';
-    case 'total_bytes':    return 'SUM(CAST(cc.upload_bytes AS DOUBLE) + CAST(cc.download_bytes AS DOUBLE))';
+    case 'connections':
+      return 'COUNT(*)';
+    case 'upload_bytes':
+      return 'SUM(CAST(cc.upload_bytes AS DOUBLE))';
+    case 'download_bytes':
+      return 'SUM(CAST(cc.download_bytes AS DOUBLE))';
+    case 'total_bytes':
+      return 'SUM(CAST(cc.upload_bytes AS DOUBLE) + CAST(cc.download_bytes AS DOUBLE))';
   }
 }
 
@@ -68,37 +77,59 @@ function jsonKeyExpr(key: string): string {
   return `json_extract_string(dim.params_json, '$.${key}')`;
 }
 
-function renderWhere(time: UsageQuery['time'], where: Where | undefined, needsDim: boolean): string[] {
+function renderWhere(
+  time: UsageQuery['time'],
+  where: Where | undefined,
+  needsDim: boolean,
+): string[] {
   const clauses: string[] = [`cc.ts >= ${time.from}`, `cc.ts <= ${time.to}`];
   if (!where) return clauses;
 
-  if (where.proxyset_eq     != null) clauses.push(`cc.proxyset = ${quoteStr(where.proxyset_eq)}`);
-  if (where.proxyset_ne     != null) clauses.push(`cc.proxyset != ${quoteStr(where.proxyset_ne)}`);
-  if (where.proxyset_in     != null) clauses.push(`cc.proxyset IN (${quoteList(where.proxyset_in)})`);
-  if (where.proxyset_not_in != null) clauses.push(`cc.proxyset NOT IN (${quoteList(where.proxyset_not_in)})`);
+  if (where.proxyset_eq != null) clauses.push(`cc.proxyset = ${quoteStr(where.proxyset_eq)}`);
+  if (where.proxyset_ne != null) clauses.push(`cc.proxyset != ${quoteStr(where.proxyset_ne)}`);
+  if (where.proxyset_in != null) clauses.push(`cc.proxyset IN (${quoteList(where.proxyset_in)})`);
+  if (where.proxyset_not_in != null)
+    clauses.push(`cc.proxyset NOT IN (${quoteList(where.proxyset_not_in)})`);
 
-  if (where.provider_eq     != null) clauses.push(`cc.provider = ${quoteStr(where.provider_eq)}`);
-  if (where.provider_ne     != null) clauses.push(`cc.provider != ${quoteStr(where.provider_ne)}`);
-  if (where.provider_in     != null) clauses.push(`cc.provider IN (${quoteList(where.provider_in)})`);
-  if (where.provider_not_in != null) clauses.push(`cc.provider NOT IN (${quoteList(where.provider_not_in)})`);
+  if (where.provider_eq != null) clauses.push(`cc.provider = ${quoteStr(where.provider_eq)}`);
+  if (where.provider_ne != null) clauses.push(`cc.provider != ${quoteStr(where.provider_ne)}`);
+  if (where.provider_in != null) clauses.push(`cc.provider IN (${quoteList(where.provider_in)})`);
+  if (where.provider_not_in != null)
+    clauses.push(`cc.provider NOT IN (${quoteList(where.provider_not_in)})`);
 
-  if (where.close_reason_eq != null) clauses.push(`cc.close_reason = ${quoteStr(where.close_reason_eq)}`);
-  if (where.close_reason_in != null) clauses.push(`cc.close_reason IN (${quoteList(where.close_reason_in)})`);
+  if (where.close_reason_eq != null)
+    clauses.push(`cc.close_reason = ${quoteStr(where.close_reason_eq)}`);
+  if (where.close_reason_in != null)
+    clauses.push(`cc.close_reason IN (${quoteList(where.close_reason_in)})`);
 
-  if (where.session_duration_eq      != null) clauses.push(`cc.session_duration_minutes = ${where.session_duration_eq}`);
-  if (where.session_duration_ne      != null) clauses.push(`cc.session_duration_minutes != ${where.session_duration_ne}`);
-  if (where.session_duration_gt      != null) clauses.push(`cc.session_duration_minutes > ${where.session_duration_gt}`);
-  if (where.session_duration_gte     != null) clauses.push(`cc.session_duration_minutes >= ${where.session_duration_gte}`);
-  if (where.session_duration_lt      != null) clauses.push(`cc.session_duration_minutes < ${where.session_duration_lt}`);
-  if (where.session_duration_lte     != null) clauses.push(`cc.session_duration_minutes <= ${where.session_duration_lte}`);
-  if (where.session_duration_between != null) clauses.push(`cc.session_duration_minutes BETWEEN ${where.session_duration_between[0]} AND ${where.session_duration_between[1]}`);
+  if (where.session_duration_eq != null)
+    clauses.push(`cc.session_duration_minutes = ${where.session_duration_eq}`);
+  if (where.session_duration_ne != null)
+    clauses.push(`cc.session_duration_minutes != ${where.session_duration_ne}`);
+  if (where.session_duration_gt != null)
+    clauses.push(`cc.session_duration_minutes > ${where.session_duration_gt}`);
+  if (where.session_duration_gte != null)
+    clauses.push(`cc.session_duration_minutes >= ${where.session_duration_gte}`);
+  if (where.session_duration_lt != null)
+    clauses.push(`cc.session_duration_minutes < ${where.session_duration_lt}`);
+  if (where.session_duration_lte != null)
+    clauses.push(`cc.session_duration_minutes <= ${where.session_duration_lte}`);
+  if (where.session_duration_between != null)
+    clauses.push(
+      `cc.session_duration_minutes BETWEEN ${where.session_duration_between[0]} AND ${where.session_duration_between[1]}`,
+    );
 
   if (needsDim) {
-    for (const p of where.session_params_eq ?? []) clauses.push(`${jsonKeyExpr(p.key)} = ${quoteScalar(p.value)}`);
-    for (const p of where.session_params_ne ?? []) clauses.push(`${jsonKeyExpr(p.key)} != ${quoteScalar(p.value)}`);
-    for (const p of where.session_params_in ?? []) clauses.push(`${jsonKeyExpr(p.key)} IN (${quoteList(p.values)})`);
-    for (const p of where.session_params_not_in ?? []) clauses.push(`${jsonKeyExpr(p.key)} NOT IN (${quoteList(p.values)})`);
-    for (const k of where.session_params_has_key ?? []) clauses.push(`${jsonKeyExpr(k)} IS NOT NULL`);
+    for (const p of where.session_params_eq ?? [])
+      clauses.push(`${jsonKeyExpr(p.key)} = ${quoteScalar(p.value)}`);
+    for (const p of where.session_params_ne ?? [])
+      clauses.push(`${jsonKeyExpr(p.key)} != ${quoteScalar(p.value)}`);
+    for (const p of where.session_params_in ?? [])
+      clauses.push(`${jsonKeyExpr(p.key)} IN (${quoteList(p.values)})`);
+    for (const p of where.session_params_not_in ?? [])
+      clauses.push(`${jsonKeyExpr(p.key)} NOT IN (${quoteList(p.values)})`);
+    for (const k of where.session_params_has_key ?? [])
+      clauses.push(`${jsonKeyExpr(k)} IS NOT NULL`);
   }
 
   return clauses;
@@ -143,16 +174,16 @@ export function renderSQL(q: UsageQuery): string {
 // ---------------------------------------------------------------------------
 
 export interface Series {
-  group:  Record<string, string | number | null>;
-  total:  number;
+  group: Record<string, string | number | null>;
+  total: number;
   points: [number, number][];
 }
 
 export interface UsageQueryResult {
-  query:  UsageQuery;
+  query: UsageQuery;
   series: Series[];
-  total:  number;
-  meta:   { series_count: number; buckets: number };
+  total: number;
+  meta: { series_count: number; buckets: number };
 }
 
 type RawRow = Record<string, unknown>;
@@ -206,16 +237,17 @@ export async function runUsageQuery(q: UsageQuery): Promise<UsageQueryResult> {
 
   for (const s of seriesMap.values()) s.points.sort((a, b) => a[0] - b[0]);
 
-  const sortBy  = q.sort?.by  ?? 'metric';
+  const sortBy = q.sort?.by ?? 'metric';
   const sortDir = q.sort?.dir ?? 'desc';
-  const cmpNum = (a: number, b: number) => sortDir === 'asc' ? a - b : b - a;
-  const cmpStr = (a: string, b: string) => sortDir === 'asc' ? a.localeCompare(b) : b.localeCompare(a);
+  const cmpNum = (a: number, b: number) => (sortDir === 'asc' ? a - b : b - a);
+  const cmpStr = (a: string, b: string) =>
+    sortDir === 'asc' ? a.localeCompare(b) : b.localeCompare(a);
 
   let series = [...seriesMap.values()];
   if (sortBy === 'metric') {
     series.sort((a, b) => cmpNum(a.total, b.total));
   } else if (sortBy === 'time') {
-    const lastTs = (s: Series) => s.points.length ? s.points[s.points.length - 1]![0] : 0;
+    const lastTs = (s: Series) => (s.points.length ? s.points[s.points.length - 1]?.[0] : 0);
     series.sort((a, b) => cmpNum(lastTs(a), lastTs(b)));
   } else {
     series.sort((a, b) => {
@@ -233,7 +265,7 @@ export async function runUsageQuery(q: UsageQuery): Promise<UsageQueryResult> {
   if (series.length > limit) series = series.slice(0, limit);
 
   return {
-    query:  q,
+    query: q,
     series,
     total,
     meta: { series_count: series.length, buckets: bucketSet.size },

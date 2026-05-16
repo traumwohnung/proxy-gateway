@@ -1,7 +1,10 @@
 ---
 import '../styles/globals.css';
 import ThemeToggle from '../components/ThemeToggle.tsx';
-interface Props { title?: string }
+
+interface Props {
+  title?: string;
+}
 const { title = 'Analytics' } = Astro.props;
 ---
 <!doctype html>

@@ -29,16 +29,19 @@ export function applyTheme(t: Theme): void {
 
 import { useEffect, useState } from 'react';
 
+// Module-level so referential identity is stable across renders — keeps
+// useExhaustiveDependencies happy without re-creating the closure each time.
+const readEffectiveTheme = (): 'light' | 'dark' =>
+  typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
+    ? 'dark'
+    : 'light';
+
 /** React hook: returns the currently effective theme ('light' | 'dark'),
  * tracking changes to the `dark` class on <html>. */
 export function useEffectiveTheme(): 'light' | 'dark' {
-  const get = (): 'light' | 'dark' =>
-    typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
-      ? 'dark'
-      : 'light';
-  const [t, setT] = useState<'light' | 'dark'>(get);
+  const [t, setT] = useState<'light' | 'dark'>(readEffectiveTheme);
   useEffect(() => {
-    const update = () => setT(get());
+    const update = () => setT(readEffectiveTheme());
     update();
     const obs = new MutationObserver(update);
     obs.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });

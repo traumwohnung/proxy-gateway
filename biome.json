@@ -1,7 +1,15 @@
 {
     "$schema": "https://biomejs.dev/schemas/2.4.6/schema.json",
     "files": {
-        "includes": ["proxy-gateway-client-ts/**"]
+        "includes": [
+            "proxy-gateway-client-ts/**",
+            "analytics-service/**",
+            "!analytics-service/node_modules/**",
+            "!analytics-service/dist/**",
+            "!analytics-service/.astro/**",
+            "!analytics-service/src/server/gen/**",
+            "!analytics-service/**/*.astro"
+        ]
     },
     "formatter": {
         "enabled": true,
@@ -32,5 +40,29 @@
         "formatter": {
             "expand": "auto"
         }
-    }
+    },
+    "css": {
+        "parser": {
+            "cssModules": false,
+            "tailwindDirectives": true
+        },
+        "formatter": {
+            "enabled": true
+        }
+    },
+    "overrides": [
+        {
+            "includes": ["analytics-service/**"],
+            "formatter": {
+                "indentWidth": 2,
+                "lineWidth": 100
+            },
+            "javascript": {
+                "formatter": {
+                    "quoteStyle": "single",
+                    "trailingCommas": "all"
+                }
+            }
+        }
+    ]
 }

@@ -1,15 +1,15 @@
+import { create } from '@bufbuild/protobuf';
 import type { ConnectRouter, HandlerContext } from '@connectrpc/connect';
 import { Code, ConnectError } from '@connectrpc/connect';
+import { sql } from '../db/client.js';
 import {
-  Ingest,
-  type Event,
   type ConnectionClosed,
-  type EpochTransition,
   type DropReport,
+  type EpochTransition,
+  type Event,
+  Ingest,
   RecordAckSchema,
 } from './gen/ingest/v1/ingest_pb.js';
-import { create } from '@bufbuild/protobuf';
-import { sql } from '../db/client.js';
 
 const INGEST_TOKEN = process.env.INGEST_TOKEN ?? '';
 
@@ -327,10 +327,7 @@ export function registerIngest(router: ConnectRouter): void {
         for await (const event of stream) {
           accept(batch, event);
           accepted += 1n;
-          if (
-            batch.raw.length >= BATCH_MAX_EVENTS ||
-            Date.now() - lastFlush >= BATCH_MAX_MS
-          ) {
+          if (batch.raw.length >= BATCH_MAX_EVENTS || Date.now() - lastFlush >= BATCH_MAX_MS) {
             await flush(batch);
             lastFlush = Date.now();
           }

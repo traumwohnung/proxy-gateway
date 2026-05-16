@@ -128,9 +128,10 @@ export async function getCurrentVersion(): Promise<number> {
     )
   `;
   type Row = { version: number | bigint };
-  const rows = (await sql`SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1`) as Row[];
+  const rows =
+    (await sql`SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1`) as Row[];
   if (rows.length === 0) return 0;
-  return Number(rows[0]!.version);
+  return Number(rows[0]?.version);
 }
 
 export async function runMigrations(): Promise<{ from: number; to: number; applied: number[] }> {

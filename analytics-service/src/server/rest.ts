@@ -32,7 +32,10 @@ function writeJSON(res: http.ServerResponse, status: number, body: unknown): voi
 
 // handleAPI returns true when it served the request; false to let the caller
 // fall through to the next handler.
-export async function handleAPI(req: http.IncomingMessage, res: http.ServerResponse): Promise<boolean> {
+export async function handleAPI(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+): Promise<boolean> {
   const url = req.url ?? '';
   if (!url.startsWith('/api/')) return false;
 

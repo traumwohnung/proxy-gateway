@@ -1,7 +1,7 @@
 import http from 'node:http';
 import http2 from 'node:http2';
-import { connectNodeAdapter } from '@connectrpc/connect-node';
 import type { ConnectRouter } from '@connectrpc/connect';
+import { connectNodeAdapter } from '@connectrpc/connect-node';
 import { registerIngest } from './ingest.js';
 import { handleAPI } from './rest.js';
 
@@ -41,14 +41,14 @@ async function startDashboard(): Promise<void> {
 
   const mimeTypes: Record<string, string> = {
     '.css': 'text/css; charset=utf-8',
-    '.js':  'application/javascript; charset=utf-8',
+    '.js': 'application/javascript; charset=utf-8',
     '.mjs': 'application/javascript; charset=utf-8',
     '.map': 'application/json; charset=utf-8',
     '.svg': 'image/svg+xml',
     '.png': 'image/png',
     '.jpg': 'image/jpeg',
     '.ico': 'image/x-icon',
-    '.woff':  'font/woff',
+    '.woff': 'font/woff',
     '.woff2': 'font/woff2',
   };
 
@@ -56,14 +56,15 @@ async function startDashboard(): Promise<void> {
     const reqUrl = req.url ?? '/';
     if (req.method !== 'GET' && req.method !== 'HEAD') return false;
     // Strip query string.
-    const pathname = reqUrl.split('?')[0]!;
+    const pathname = reqUrl.split('?')[0] ?? '/';
     // Block traversal.
     if (pathname.includes('..')) return false;
     const filePath = path.join(clientDir, pathname);
     if (!filePath.startsWith(clientDir)) return false;
-    // No annotation needed — fs.statSync returns Stats inferred. The explicit
-    // namespace type doesn't survive a dynamic `import('node:fs')` under TS 6.
-    let stat;
+    // Annotate as ReturnType so biome doesn't see implicit any. The
+    // `fs.Stats` namespace doesn't survive a dynamic `import('node:fs')`
+    // under TS 6, so derive the type from the function instead.
+    let stat: ReturnType<typeof fs.statSync>;
     try {
       stat = fs.statSync(filePath);
     } catch {
@@ -74,24 +75,30 @@ async function startDashboard(): Promise<void> {
     res.setHeader('Content-Type', mimeTypes[ext] ?? 'application/octet-stream');
     res.setHeader('Content-Length', stat.size);
     res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-    if (req.method === 'HEAD') { res.end(); return true; }
+    if (req.method === 'HEAD') {
+      res.end();
+      return true;
+    }
     fs.createReadStream(filePath).pipe(res);
     return true;
   }
 
-  http.createServer(async (req, res) => {
-    if (req.url?.startsWith('/api/')) {
-      try { if (await handleAPI(req, res)) return; }
-      catch (e) {
-        res.statusCode = 500;
-        res.end(JSON.stringify({ error: (e as Error).message }));
-        return;
+  http
+    .createServer(async (req, res) => {
+      if (req.url?.startsWith('/api/')) {
+        try {
+          if (await handleAPI(req, res)) return;
+        } catch (e) {
+          res.statusCode = 500;
+          res.end(JSON.stringify({ error: (e as Error).message }));
+          return;
+        }
       }
-    }
-    if (serveStatic(req, res)) return;
-    ssrHandler(req, res);
-  }).listen(DASHBOARD_PORT, DASHBOARD_HOST, () => {
-    console.log(`[dashboard] listening on ${DASHBOARD_HOST}:${DASHBOARD_PORT}`);
-  });
+      if (serveStatic(req, res)) return;
+      ssrHandler(req, res);
+    })
+    .listen(DASHBOARD_PORT, DASHBOARD_HOST, () => {
+      console.log(`[dashboard] listening on ${DASHBOARD_HOST}:${DASHBOARD_PORT}`);
+    });
 }
 await startDashboard();

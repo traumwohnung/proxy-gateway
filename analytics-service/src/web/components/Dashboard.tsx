@@ -1,10 +1,10 @@
 import { useEffect } from 'react';
+import type { UsageQuery } from '../../db/query';
 import { useStore } from '../lib/store';
-import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import QueryForm from './QueryForm';
 import QueryJsonPanel from './QueryJsonPanel';
 import ResponseViewer from './ResponseViewer';
-import type { UsageQuery } from '../../db/query';
+import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 
 export default function Dashboard() {
   const { query, result, loading, error, setQuery, run } = useStore();

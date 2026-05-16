@@ -4,7 +4,11 @@ import { defaultQuery } from './query-url.js';
 
 export interface UsageQueryResult {
   query: UsageQuery;
-  series: { group: Record<string, string | number | null>; total: number; points: [number, number][] }[];
+  series: {
+    group: Record<string, string | number | null>;
+    total: number;
+    points: [number, number][];
+  }[];
   total: number;
   meta: { series_count: number; buckets: number };
 }
@@ -14,9 +18,9 @@ interface State {
   query: UsageQuery;
   /** Live draft from the form, updates on every edit. */
   draftQuery: UsageQuery;
-  result:  UsageQueryResult | null;
+  result: UsageQueryResult | null;
   loading: boolean;
-  error:   string | null;
+  error: string | null;
   setQuery(next: UsageQuery): void;
   setDraftQuery(next: UsageQuery): void;
   run(): Promise<void>;
@@ -27,9 +31,9 @@ export const useStore = create<State>((set, get) => {
   return {
     query: initial,
     draftQuery: initial,
-    result:  null,
+    result: null,
     loading: false,
-    error:   null,
+    error: null,
 
     setQuery(next) {
       set({ query: next, draftQuery: next });
@@ -43,9 +47,9 @@ export const useStore = create<State>((set, get) => {
       const { query } = get();
       try {
         const res = await fetch('/api/usage/query', {
-          method:  'POST',
+          method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify(query),
+          body: JSON.stringify(query),
         });
         if (!res.ok) {
           const text = await res.text();

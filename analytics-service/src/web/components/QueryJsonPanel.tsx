@@ -1,10 +1,10 @@
-import { useState } from 'react';
 import Editor from '@monaco-editor/react';
-import { Copy, Check, ClipboardPaste, AlertCircle } from 'lucide-react';
-import { Button } from './ui/button';
+import { AlertCircle, Check, ClipboardPaste, Copy } from 'lucide-react';
+import { useState } from 'react';
+import { validate } from '../../db/query-schema';
 import { useStore } from '../lib/store';
 import { useEffectiveTheme } from '../lib/theme';
-import { validate } from '../../db/query-schema';
+import { Button } from './ui/button';
 
 export default function QueryJsonPanel() {
   const draftQuery = useStore((s) => s.draftQuery);
@@ -32,7 +32,9 @@ export default function QueryJsonPanel() {
     try {
       const text = await navigator.clipboard.readText();
       let parsed: unknown;
-      try { parsed = JSON.parse(text); } catch {
+      try {
+        parsed = JSON.parse(text);
+      } catch {
         setError('clipboard is not valid JSON');
         return;
       }
@@ -74,7 +76,13 @@ export default function QueryJsonPanel() {
         <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive mt-2">
           <AlertCircle className="h-3 w-3 mt-0.5 flex-shrink-0" />
           <span className="flex-1">{error}</span>
-          <button onClick={() => setError(null)} className="text-destructive/70 hover:text-destructive">×</button>
+          <button
+            type="button"
+            onClick={() => setError(null)}
+            className="text-destructive/70 hover:text-destructive"
+          >
+            ×
+          </button>
         </div>
       )}
 

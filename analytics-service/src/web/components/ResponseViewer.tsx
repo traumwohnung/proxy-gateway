@@ -1,23 +1,23 @@
-import { useMemo } from 'react';
 import { format } from 'date-fns';
+import { Clock, Database, Layers, TrendingUp } from 'lucide-react';
+import { useMemo } from 'react';
 import {
-  AreaChart,
   Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  ResponsiveContainer,
+  Tooltip,
   XAxis,
   YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  Cell,
 } from 'recharts';
-import { Database, TrendingUp, Layers, Clock } from 'lucide-react';
+import type { Metric, UsageQuery } from '../../db/query';
+import type { UsageQueryResult } from '../lib/store';
+import { formatBytes } from '../lib/utils';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
-import { formatBytes } from '../lib/utils';
-import type { UsageQuery, Metric } from '../../db/query';
-import type { UsageQueryResult } from '../lib/store';
 
 interface Props {
   result: UsageQueryResult | null;
@@ -57,7 +57,8 @@ export default function ResponseViewer({ result, query, isLoading }: Props) {
   const aggregatedChart = useMemo(() => {
     if (!result) return [] as { ts: number; label: string; value: number }[];
     const totals = new Map<number, number>();
-    for (const s of result.series) for (const [t, v] of s.points) totals.set(t, (totals.get(t) ?? 0) + v);
+    for (const s of result.series)
+      for (const [t, v] of s.points) totals.set(t, (totals.get(t) ?? 0) + v);
     return buckets.map((b) => ({
       ts: b,
       label: fmtTs(b, query.time.resolution),
@@ -65,14 +66,17 @@ export default function ResponseViewer({ result, query, isLoading }: Props) {
     }));
   }, [result, query.time.resolution, buckets]);
 
-  const maxVal = useMemo(() => Math.max(0, ...aggregatedChart.map((d) => d.value)), [aggregatedChart]);
+  const maxVal = useMemo(
+    () => Math.max(0, ...aggregatedChart.map((d) => d.value)),
+    [aggregatedChart],
+  );
 
   if (isLoading) {
     return (
       <div className="space-y-6">
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          {[...Array(4)].map((_, i) => (
-            <Card key={i}>
+          {(['a', 'b', 'c', 'd'] as const).map((k) => (
+            <Card key={k}>
               <CardContent className="pt-6">
                 <div className="h-4 w-20 bg-muted animate-pulse rounded mb-2" />
                 <div className="h-8 w-28 bg-muted animate-pulse rounded" />
@@ -120,7 +124,9 @@ export default function ResponseViewer({ result, query, isLoading }: Props) {
             <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
               <Database className="h-4 w-4" /> <span>Total</span>
             </div>
-            <p className="text-xl font-semibold text-primary font-mono">{fmtMetric(query.metric, result.total)}</p>
+            <p className="text-xl font-semibold text-primary font-mono">
+              {fmtMetric(query.metric, result.total)}
+            </p>
           </CardContent>
         </Card>
         <Card className="hover:border-primary/30 transition-colors">
@@ -157,7 +163,10 @@ export default function ResponseViewer({ result, query, isLoading }: Props) {
             <TabsContent value="area">
               <div className="h-72">
                 <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={aggregatedChart} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                  <AreaChart
+                    data={aggregatedChart}
+                    margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
+                  >
                     <defs>
                       <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="5%" stopColor={accentVar} stopOpacity={0.3} />
@@ -165,7 +174,12 @@ export default function ResponseViewer({ result, query, isLoading }: Props) {
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                    <XAxis dataKey="label" stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} />
+                    <XAxis
+                      dataKey="label"
+                      stroke="hsl(var(--muted-foreground))"
+                      fontSize={12}
+                      tickLine={false}
+                    />
                     <YAxis
                       stroke="hsl(var(--muted-foreground))"
                       fontSize={12}
@@ -180,9 +194,19 @@ export default function ResponseViewer({ result, query, isLoading }: Props) {
                         color: 'hsl(var(--popover-foreground))',
                       }}
                       labelStyle={{ color: 'hsl(var(--muted-foreground))' }}
-                      formatter={(value: unknown) => [fmtMetric(query.metric, Number(value)), labelFor(query.metric)]}
+                      formatter={(value: unknown) => [
+                        fmtMetric(query.metric, Number(value)),
+                        labelFor(query.metric),
+                      ]}
                     />
-                    <Area type="monotone" dataKey="value" stroke={accentVar} strokeWidth={2} fillOpacity={1} fill="url(#colorValue)" />
+                    <Area
+                      type="monotone"
+                      dataKey="value"
+                      stroke={accentVar}
+                      strokeWidth={2}
+                      fillOpacity={1}
+                      fill="url(#colorValue)"
+                    />
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
@@ -191,9 +215,17 @@ export default function ResponseViewer({ result, query, isLoading }: Props) {
             <TabsContent value="bar">
               <div className="h-72">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={aggregatedChart} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                  <BarChart
+                    data={aggregatedChart}
+                    margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
+                  >
                     <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                    <XAxis dataKey="label" stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} />
+                    <XAxis
+                      dataKey="label"
+                      stroke="hsl(var(--muted-foreground))"
+                      fontSize={12}
+                      tickLine={false}
+                    />
                     <YAxis
                       stroke="hsl(var(--muted-foreground))"
                       fontSize={12}
@@ -208,12 +240,15 @@ export default function ResponseViewer({ result, query, isLoading }: Props) {
                         color: 'hsl(var(--popover-foreground))',
                       }}
                       labelStyle={{ color: 'hsl(var(--muted-foreground))' }}
-                      formatter={(value: unknown) => [fmtMetric(query.metric, Number(value)), labelFor(query.metric)]}
+                      formatter={(value: unknown) => [
+                        fmtMetric(query.metric, Number(value)),
+                        labelFor(query.metric),
+                      ]}
                     />
                     <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-                      {aggregatedChart.map((entry, idx) => (
+                      {aggregatedChart.map((entry) => (
                         <Cell
-                          key={idx}
+                          key={entry.label}
                           fill={accentVar}
                           fillOpacity={maxVal > 0 ? 0.3 + (entry.value / maxVal) * 0.7 : 0.3}
                         />
@@ -231,9 +266,9 @@ export default function ResponseViewer({ result, query, isLoading }: Props) {
                   <div className="flex items-center gap-2">
                     <span>less</span>
                     <div className="flex gap-0.5">
-                      {[0.15, 0.3, 0.5, 0.7, 0.9].map((o, i) => (
+                      {[0.15, 0.3, 0.5, 0.7, 0.9].map((o) => (
                         <div
-                          key={i}
+                          key={o}
                           className="w-3 h-3 rounded-sm"
                           style={{ backgroundColor: accentVar, opacity: o }}
                         />
@@ -256,7 +291,11 @@ export default function ResponseViewer({ result, query, isLoading }: Props) {
                             key={b}
                             title={fmtTs(b, query.time.resolution)}
                             className="text-muted-foreground font-normal align-bottom whitespace-nowrap"
-                            style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', height: 64 }}
+                            style={{
+                              writingMode: 'vertical-rl',
+                              transform: 'rotate(180deg)',
+                              height: 64,
+                            }}
                           >
                             {fmtTs(b, query.time.resolution)}
                           </th>
@@ -305,7 +344,6 @@ export default function ResponseViewer({ result, query, isLoading }: Props) {
           </Tabs>
         </CardContent>
       </Card>
-
     </div>
   );
 }

@@ -1,8 +1,13 @@
+import { Monitor, Moon, Sun } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { Sun, Moon, Monitor } from 'lucide-react';
-import { Button } from './ui/button';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from './ui/dropdown-menu';
 import { applyTheme, getStoredTheme, setStoredTheme, type Theme } from '../lib/theme';
+import { Button } from './ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from './ui/dropdown-menu';
 
 export default function ThemeToggle() {
   const [theme, setTheme] = useState<Theme>('system');
@@ -12,7 +17,9 @@ export default function ThemeToggle() {
     setTheme(initial);
     applyTheme(initial);
     const mq = matchMedia('(prefers-color-scheme: dark)');
-    const onChange = () => { if (getStoredTheme() === 'system') applyTheme('system'); };
+    const onChange = () => {
+      if (getStoredTheme() === 'system') applyTheme('system');
+    };
     mq.addEventListener('change', onChange);
     return () => mq.removeEventListener('change', onChange);
   }, []);

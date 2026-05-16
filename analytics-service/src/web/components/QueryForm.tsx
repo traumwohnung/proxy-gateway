@@ -1,23 +1,18 @@
+// biome-ignore-all lint/correctness/noChildrenProp: TanStack Form uses `children` as a render-prop API
+// biome-ignore-all lint/suspicious/noArrayIndexKey: form rows are append-only; index is stable enough for this form
 import { useForm } from '@tanstack/react-form';
-import { useEffect } from 'react';
-import { useStore } from '../lib/store';
 import { format } from 'date-fns';
 import { CalendarIcon, Plus, X } from 'lucide-react';
+import { useEffect } from 'react';
+import type { Dimension, Metric, UsageQuery } from '../../db/query';
+import { useStore } from '../lib/store';
+import { cn } from '../lib/utils';
 import { Button } from './ui/button';
+import { Calendar } from './ui/calendar';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
-import { Badge } from './ui/badge';
-import { Calendar } from './ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from './ui/select';
-import type { UsageQuery, Metric, Dimension } from '../../db/query';
-import { cn } from '../lib/utils';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 
 type ResUnit = 'none' | 'minute' | 'hour' | 'day';
 
@@ -54,13 +49,14 @@ function queryToValues(q: UsageQuery): FormValues {
       proxyset_eq: w.proxyset_eq ?? '',
       session_duration_gte: w.session_duration_gte != null ? String(w.session_duration_gte) : '',
       session_duration_lte: w.session_duration_lte != null ? String(w.session_duration_lte) : '',
-      session_params_eq: (w.session_params_eq ?? []).map((e) => ({ key: e.key, value: String(e.value) })),
+      session_params_eq: (w.session_params_eq ?? []).map((e) => ({
+        key: e.key,
+        value: String(e.value),
+      })),
       session_params_has_key: (w.session_params_has_key ?? []).map((k) => ({ key: k })),
     },
     group_by: (q.group_by ?? []).map((d) =>
-      d.kind === 'json'
-        ? { kind: 'json' as const, key: d.key }
-        : { kind: d.kind, key: '' },
+      d.kind === 'json' ? { kind: 'json' as const, key: d.key } : { kind: d.kind, key: '' },
     ),
     sort_by: q.sort?.by ?? 'metric',
     sort_dir: q.sort?.dir ?? 'desc',
@@ -82,8 +78,10 @@ function valuesToQuery(v: FormValues): UsageQuery {
 
   const where: NonNullable<UsageQuery['where']> = {};
   if (v.where.proxyset_eq.trim()) where.proxyset_eq = v.where.proxyset_eq.trim();
-  if (v.where.session_duration_gte !== '') where.session_duration_gte = Number(v.where.session_duration_gte);
-  if (v.where.session_duration_lte !== '') where.session_duration_lte = Number(v.where.session_duration_lte);
+  if (v.where.session_duration_gte !== '')
+    where.session_duration_gte = Number(v.where.session_duration_gte);
+  if (v.where.session_duration_lte !== '')
+    where.session_duration_lte = Number(v.where.session_duration_lte);
   const eqs = v.where.session_params_eq.filter((e) => e.key.trim());
   if (eqs.length) where.session_params_eq = eqs.map((e) => ({ key: e.key.trim(), value: e.value }));
   const hasKeys = v.where.session_params_has_key.map((k) => k.key.trim()).filter(Boolean);
@@ -92,11 +90,7 @@ function valuesToQuery(v: FormValues): UsageQuery {
 
   const groups: Dimension[] = v.group_by
     .filter((g) => g.kind !== 'json' || g.key.trim())
-    .map((g) =>
-      g.kind === 'json'
-        ? { kind: 'json', key: g.key.trim() }
-        : { kind: g.kind },
-    );
+    .map((g) => (g.kind === 'json' ? { kind: 'json', key: g.key.trim() } : { kind: g.kind }));
   if (groups.length) next.group_by = groups;
 
   if (v.sort_by) next.sort = { by: v.sort_by, dir: v.sort_dir };
@@ -111,7 +105,9 @@ interface Props {
 }
 
 function DraftSync({ values, onSync }: { values: FormValues; onSync: (q: UsageQuery) => void }) {
-  useEffect(() => { onSync(valuesToQuery(values)); }, [values, onSync]);
+  useEffect(() => {
+    onSync(valuesToQuery(values));
+  }, [values, onSync]);
   return null;
 }
 
@@ -126,7 +122,7 @@ export default function QueryForm({ query, onSubmit, isLoading }: Props) {
   useEffect(() => {
     form.reset(queryToValues(query));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query]);
+  }, [query, form.reset]);
 
   return (
     <form
@@ -164,7 +160,11 @@ export default function QueryForm({ query, onSubmit, isLoading }: Props) {
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-auto p-0" align="start">
-                  <Calendar mode="single" selected={f.state.value} onSelect={(d) => d && f.handleChange(d)} />
+                  <Calendar
+                    mode="single"
+                    selected={f.state.value}
+                    onSelect={(d) => d && f.handleChange(d)}
+                  />
                 </PopoverContent>
               </Popover>
             </div>
@@ -190,7 +190,11 @@ export default function QueryForm({ query, onSubmit, isLoading }: Props) {
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-auto p-0" align="start">
-                  <Calendar mode="single" selected={f.state.value} onSelect={(d) => d && f.handleChange(d)} />
+                  <Calendar
+                    mode="single"
+                    selected={f.state.value}
+                    onSelect={(d) => d && f.handleChange(d)}
+                  />
                 </PopoverContent>
               </Popover>
             </div>
@@ -230,7 +234,6 @@ export default function QueryForm({ query, onSubmit, isLoading }: Props) {
             />
           </div>
         </div>
-
       </div>
 
       {/* ── Metric + Proxyset ── */}
@@ -276,7 +279,9 @@ export default function QueryForm({ query, onSubmit, isLoading }: Props) {
           name="where.session_duration_gte"
           children={(f) => (
             <div className="space-y-2 flex-1">
-              <Label className="text-xs text-muted-foreground font-medium">Session Duration ≥ (min)</Label>
+              <Label className="text-xs text-muted-foreground font-medium">
+                Session Duration ≥ (min)
+              </Label>
               <Input
                 type="number"
                 min={0}
@@ -291,7 +296,9 @@ export default function QueryForm({ query, onSubmit, isLoading }: Props) {
           name="where.session_duration_lte"
           children={(f) => (
             <div className="space-y-2 flex-1">
-              <Label className="text-xs text-muted-foreground font-medium">Session Duration ≤ (min)</Label>
+              <Label className="text-xs text-muted-foreground font-medium">
+                Session Duration ≤ (min)
+              </Label>
               <Input
                 type="number"
                 min={0}
@@ -389,7 +396,9 @@ export default function QueryForm({ query, onSubmit, isLoading }: Props) {
         children={(f) => (
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <Label className="text-xs text-muted-foreground font-medium">Session Params Equals</Label>
+              <Label className="text-xs text-muted-foreground font-medium">
+                Session Params Equals
+              </Label>
               <Button
                 type="button"
                 variant="ghost"
@@ -453,7 +462,9 @@ export default function QueryForm({ query, onSubmit, isLoading }: Props) {
         children={(f) => (
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <Label className="text-xs text-muted-foreground font-medium">Session Params Has Key</Label>
+              <Label className="text-xs text-muted-foreground font-medium">
+                Session Params Has Key
+              </Label>
               <Button
                 type="button"
                 variant="ghost"
@@ -538,7 +549,10 @@ export default function QueryForm({ query, onSubmit, isLoading }: Props) {
                 children={(f) => (
                   <div className="space-y-2">
                     <Label className="text-xs text-muted-foreground font-medium">Direction</Label>
-                    <Select value={f.state.value} onValueChange={(v) => f.handleChange(v as 'asc' | 'desc')}>
+                    <Select
+                      value={f.state.value}
+                      onValueChange={(v) => f.handleChange(v as 'asc' | 'desc')}
+                    >
                       <SelectTrigger>
                         <SelectValue />
                       </SelectTrigger>
