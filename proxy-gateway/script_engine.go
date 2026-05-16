@@ -111,6 +111,17 @@ func runCallable(ctx context.Context, scriptName, entryName string, fn starlark.
 // New cross-script-type builtins land here.
 func predeclared() starlark.StringDict {
 	return starlark.StringDict{
+		// Pattern matchers — typically assigned at init to frozen globals
+		// so each call is O(n) match against a pre-compiled program.
 		"regex": starlark.NewBuiltin("regex", regexBuiltin),
+		"xpath": starlark.NewBuiltin("xpath", xpathBuiltin),
+
+		// Codec helpers.
+		"json_decode":   starlark.NewBuiltin("json_decode", jsonDecodeBuiltin),
+		"json_encode":   starlark.NewBuiltin("json_encode", jsonEncodeBuiltin),
+		"base64_decode": starlark.NewBuiltin("base64_decode", base64DecodeBuiltin),
+		"base64_encode": starlark.NewBuiltin("base64_encode", base64EncodeBuiltin),
+		"url_decode":    starlark.NewBuiltin("url_decode", urlDecodeBuiltin),
+		"url_encode":    starlark.NewBuiltin("url_encode", urlEncodeBuiltin),
 	}
 }

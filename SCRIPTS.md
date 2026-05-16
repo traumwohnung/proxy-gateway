@@ -163,6 +163,66 @@ Methods on the returned object:
 
 Inputs accept both `bytes` and `str`. Patterns capped at 4 KiB.
 
+### `xpath(expression)`
+
+Compile an XPath expression once and reuse it. Best-effort HTML parser is
+tolerant of partial / malformed markup (which is what scrapes usually see
+mid-stream).
+
+```python
+TITLE   = xpath("//title")
+CAPTCHA = xpath('//div[contains(@class,"captcha") or contains(@id,"captcha")]')
+
+def response_bailing(r):
+    if CAPTCHA.test(r.peek()):
+        return "captcha"
+    for t in TITLE.query(r.peek()):
+        if b"Just a moment" in t:
+            return "cloudflare_challenge"
+```
+
+Methods on the returned object:
+
+| Call                | Returns         |
+| ------------------- | --------------- |
+| `pat.test(html)`    | `bool`          |
+| `pat.query(html)`   | `list[bytes]` — inner text of each matched node |
+
+Input accepts both `bytes` and `str`. Expressions capped at 2 KiB. The
+underlying parser (Go's `golang.org/x/net/html` via `htmlquery`) accepts
+malformed HTML and recovers as much structure as it can.
+
+### Codec helpers
+
+All accept both `bytes` and `str` input; decoders return `None` (not raise)
+on malformed input so scripts can use them defensively without try/except.
+
+| Builtin                  | Returns           | Notes                                                                |
+| ------------------------ | ----------------- | -------------------------------------------------------------------- |
+| `json_decode(input)`     | scalar / list / dict / `None` | Whole-number JSON floats are promoted to `int`. Returns `None` on malformed input. |
+| `json_encode(value)`     | `bytes`           | Canonical JSON. `bytes` are encoded as strings.                      |
+| `base64_decode(input)`   | `bytes` / `None`  | Accepts both std and URL-safe alphabets, padded or not.              |
+| `base64_encode(input)`   | `str`             | Standard padded encoding.                                            |
+| `url_decode(input)`      | `str` / `None`    | Percent-decoded (form-style; `+` → space).                           |
+| `url_encode(input)`      | `str`             | Percent-encoded (form-style).                                        |
+
+Example patterns:
+
+```python
+# Bail on a JSON error body
+def response_bailing(r):
+    body = json_decode(r.peek())
+    if body != None and body.get("status") == "blocked":
+        return body.get("reason", "blocked")
+
+# Bail when a base64 antibot payload appears
+DD = regex(rb'dd_b64="([A-Za-z0-9+/=]+)"')
+def response_bailing(r):
+    m = DD.find(r.peek())
+    if m != None and base64_decode(m[8:-1]) != None:
+        return "datadome_embedded"
+```
+
 ## Recipes
 
 ### Anti-bot detection
