@@ -24,8 +24,7 @@ src/web/                       # Astro app (mostly server components)
 
 | Var                       | Default                  | Purpose                          |
 | ------------------------- | ------------------------ | -------------------------------- |
-| `ANALYTICS_DB_URL`        | `file:./analytics.db`    | libSQL URL (or `libsql://...`)   |
-| `ANALYTICS_DB_AUTH_TOKEN` | -                        | Turso auth token, if remote      |
+| `ANALYTICS_DB_URL`        | `file:./analytics.duckdb`| DuckDB file path or `:memory:`. Must NOT point at a SQLite file — DuckDB will silently attach it via the sqlite extension and writes go nowhere persistent. |
 | `INGEST_TOKEN`            | (unset = no auth)        | Required bearer for ingest gRPC  |
 | `INGEST_PORT`             | `50051`                  | gRPC listener                    |
 | `DASHBOARD_PORT`          | `4321`                   | Astro HTTP listener              |

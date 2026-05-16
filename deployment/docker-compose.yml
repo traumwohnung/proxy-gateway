@@ -27,7 +27,7 @@ services:
     volumes:
       - analytics-data:/data
     environment:
-      - ANALYTICS_DB_URL=file:/data/analytics.db
+      - ANALYTICS_DB_URL=file:/data/analytics.duckdb
       - INGEST_TOKEN=${INGEST_TOKEN:-}
       - INGEST_PORT=50051
       - DASHBOARD_PORT=4321

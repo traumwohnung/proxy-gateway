@@ -9,7 +9,7 @@ FROM oven/bun:1
 WORKDIR /app
 COPY --from=build /app /app
 ENV NODE_ENV=production
-ENV ANALYTICS_DB_URL=file:/data/analytics.db
+ENV ANALYTICS_DB_URL=file:/data/analytics.duckdb
 ENV INGEST_PORT=50051
 ENV DASHBOARD_PORT=4321
 ENV DASHBOARD_HOST=0.0.0.0
