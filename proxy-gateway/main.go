@@ -11,6 +11,17 @@ import (
 func main() {
 	initLogging(os.Getenv("LOG_LEVEL"))
 
+	// `healthcheck [config]` self-probes the running proxy (used by the
+	// distroless container HEALTHCHECK, which has no shell/curl).
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		hcConfig := "config.toml"
+		if len(os.Args) > 2 {
+			hcConfig = os.Args[2]
+		}
+		runHealthCheck(hcConfig)
+		return
+	}
+
 	configPath := "config.toml"
 	if len(os.Args) > 1 {
 		configPath = os.Args[1]

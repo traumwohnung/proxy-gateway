@@ -74,7 +74,7 @@ func RunServer(cfg *Config, srv *Server, apiKey string) error {
 	// because CONNECT tunnels are long-lived bidirectional streams.
 	httpSrv := &http.Server{
 		Addr:              cfg.BindAddr,
-		Handler:           proxykit.HTTPProxyHandler(srv.Pipeline),
+		Handler:           withHealth(proxykit.HTTPProxyHandler(srv.Pipeline)),
 		ReadHeaderTimeout: proxyReadHeaderTimeout,
 	}
 
