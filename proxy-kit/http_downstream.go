@@ -12,6 +12,23 @@ import (
 	"time"
 )
 
+// upstreamLabel renders a Proxy as host:port for log attribution, or "direct"
+// when the resolver picked the no-proxy path. Without this, "upstream dial
+// failed" lines carry no provider info and failure rates can't be sliced.
+func upstreamLabel(p *Proxy) string {
+	if p == nil || p.Host == "" {
+		return "direct"
+	}
+	return fmt.Sprintf("%s:%d", p.Host, p.Port)
+}
+
+func upstreamProto(p *Proxy) string {
+	if p == nil || p.Host == "" {
+		return "direct"
+	}
+	return string(p.Proto())
+}
+
 // bufferedConn wraps a net.Conn with a bufio.Reader so that any bytes the
 // net/http server already read ahead (e.g. a coalesced TLS ClientHello that
 // arrived in the same TCP segment as the CONNECT request) are replayed before
@@ -187,7 +204,12 @@ func (d *HTTPDownstream) serveConnect(w http.ResponseWriter, r *http.Request, ra
 			upstreamConn, err = d.Upstream.Dial(r.Context(), result.Proxy, r.Host)
 		}
 		if err != nil {
-			slog.Error("upstream dial failed", "target", r.Host, "err", err)
+			slog.Error("upstream dial failed",
+				"target", r.Host,
+				"upstream", upstreamLabel(result.Proxy),
+				"upstream_proto", upstreamProto(result.Proxy),
+				"err", err,
+			)
 			if result.ConnTracker != nil {
 				result.ConnTracker.Close(0, 0, "upstream_err")
 			}
@@ -226,7 +248,12 @@ func (d *HTTPDownstream) serveConnect(w http.ResponseWriter, r *http.Request, ra
 		upstreamConn, err = d.Upstream.Dial(r.Context(), proxy, r.Host)
 	}
 	if err != nil {
-		slog.Error("upstream dial failed", "target", r.Host, "err", err)
+		slog.Error("upstream dial failed",
+			"target", r.Host,
+			"upstream", upstreamLabel(proxy),
+			"upstream_proto", upstreamProto(proxy),
+			"err", err,
+		)
 		if result.ConnTracker != nil {
 			result.ConnTracker.Close(0, 0, "upstream_err")
 		}
