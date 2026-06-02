@@ -29,6 +29,22 @@ func upstreamProto(p *Proxy) string {
 	return string(p.Proto())
 }
 
+// originOf attributes a dial failure to where it happened, for the `origin` log
+// field downstream systems filter on:
+//   - "gateway"        — resolve/auth/no-proxy: we never reached an upstream
+//   - "upstream_proxy" — the residential proxy was unreachable or rejected CONNECT
+//   - "target"         — direct (no proxy) dial to the destination failed
+//
+// Clients of a CONNECT tunnel can't read these over the wire (a failed CONNECT
+// surfaces only as a transport error like "Bad Gateway"), so this lives in the
+// gateway's own logs — the only place that can split "proxy hop" failures.
+func originOf(p *Proxy) string {
+	if p == nil || p.Host == "" {
+		return "target"
+	}
+	return "upstream_proxy"
+}
+
 // bufferedConn wraps a net.Conn with a bufio.Reader so that any bytes the
 // net/http server already read ahead (e.g. a coalesced TLS ClientHello that
 // arrived in the same TCP segment as the CONNECT request) are replayed before
@@ -163,7 +179,7 @@ func (d *HTTPDownstream) serveConnect(w http.ResponseWriter, r *http.Request, ra
 	}
 	result, err := handler.Resolve(connectCtx, req)
 	if err != nil {
-		slog.Warn("resolve error", "target", r.Host, "err", err)
+		slog.Warn("resolve error", "target", r.Host, "origin", "gateway", "err", err)
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
@@ -191,7 +207,7 @@ func (d *HTTPDownstream) serveConnect(w http.ResponseWriter, r *http.Request, ra
 		req.Conn = clientConn
 		result, err = handler.Resolve(connectCtx, req)
 		if err != nil {
-			slog.Warn("resolve error (post-hijack)", "target", r.Host, "err", err)
+			slog.Warn("resolve error (post-hijack)", "target", r.Host, "origin", "gateway", "err", err)
 			return
 		}
 		if result == nil || result.Proxy == nil {
@@ -206,6 +222,7 @@ func (d *HTTPDownstream) serveConnect(w http.ResponseWriter, r *http.Request, ra
 		if err != nil {
 			slog.Error("upstream dial failed",
 				"target", r.Host,
+				"origin", originOf(result.Proxy),
 				"upstream", upstreamLabel(result.Proxy),
 				"upstream_proto", upstreamProto(result.Proxy),
 				"err", err,
@@ -233,6 +250,7 @@ func (d *HTTPDownstream) serveConnect(w http.ResponseWriter, r *http.Request, ra
 	}
 
 	if result == nil || result.Proxy == nil {
+		slog.Warn("no proxy available", "target", r.Host, "origin", "gateway")
 		http.Error(w, "no proxy available", http.StatusServiceUnavailable)
 		return
 	}
@@ -250,6 +268,7 @@ func (d *HTTPDownstream) serveConnect(w http.ResponseWriter, r *http.Request, ra
 	if err != nil {
 		slog.Error("upstream dial failed",
 			"target", r.Host,
+			"origin", originOf(proxy),
 			"upstream", upstreamLabel(proxy),
 			"upstream_proto", upstreamProto(proxy),
 			"err", err,
@@ -318,7 +337,7 @@ func (d *HTTPDownstream) servePlainHTTP(w http.ResponseWriter, r *http.Request, 
 
 	result, err := handler.Resolve(r.Context(), req)
 	if err != nil {
-		slog.Warn("resolve error", "target", r.Host, "err", err)
+		slog.Warn("resolve error", "target", r.Host, "origin", "gateway", "err", err)
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
@@ -333,6 +352,7 @@ func (d *HTTPDownstream) servePlainHTTP(w http.ResponseWriter, r *http.Request, 
 	}
 
 	if result == nil || result.Proxy == nil {
+		slog.Warn("no proxy available", "target", r.Host, "origin", "gateway")
 		http.Error(w, "no proxy available", http.StatusServiceUnavailable)
 		return
 	}
@@ -350,6 +370,12 @@ func (d *HTTPDownstream) servePlainHTTP(w http.ResponseWriter, r *http.Request, 
 
 	resp, err := ForwardPlainHTTP(r, proxy)
 	if err != nil {
+		slog.Error("forward failed",
+			"target", r.Host,
+			"origin", originOf(proxy),
+			"upstream", upstreamLabel(proxy),
+			"err", err,
+		)
 		http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
 		if result.ConnTracker != nil {
 			result.ConnTracker.Close(0, 0, "upstream_err")
