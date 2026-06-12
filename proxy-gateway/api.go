@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -64,7 +65,7 @@ func toAPISessionInfo(info *utils.SessionInfo) *apiSessionInfo {
 func bearerAuth(apiKey string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if !ok || token != apiKey {
+		if !ok || subtle.ConstantTimeCompare([]byte(token), []byte(apiKey)) != 1 {
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			writeJSON(w, http.StatusUnauthorized, apiError{Error: "Invalid or missing API key"})
 			return
