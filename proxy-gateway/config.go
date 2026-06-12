@@ -26,6 +26,13 @@ type Config struct {
 	MITMCACert string `toml:"mitm_ca_cert" yaml:"mitm_ca_cert" json:"mitm_ca_cert"`
 	MITMCAKey  string `toml:"mitm_ca_key"  yaml:"mitm_ca_key"  json:"mitm_ca_key"`
 
+	// DestinationAllowlist limits which destination hosts the gateway will
+	// proxy to. Each entry is either an exact host ("www.immowelt.de") or a
+	// domain suffix (".immobilienscout24.de", matching that domain and all
+	// subdomains). When empty the allowlist is disabled (any destination is
+	// allowed) — production configs MUST set this. See TRA-302 / audit H4.
+	DestinationAllowlist []string `toml:"destination_allowlist" yaml:"destination_allowlist" json:"destination_allowlist"`
+
 	// Scripts is the registry of named Starlark scripts. Each entry is
 	// compiled at config load; references from the `mitm.scripts` array in
 	// a username's JSON are looked up here.

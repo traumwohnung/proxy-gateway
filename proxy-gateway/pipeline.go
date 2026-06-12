@@ -43,7 +43,12 @@ func BuildServer(cfg *Config, configDir string, proxyPassword string, tracker *U
 	}
 
 	conditionalMITM := utils.ConditionalMITM(ca, getHTTPCloakSpec, inner)
-	pipeline := PasswordAuth(proxyPassword, ParseJSONCreds(cfg.Registry(), conditionalMITM))
+	allowlist := NewDestinationAllowlist(cfg.DestinationAllowlist)
+	if allowlist == nil {
+		slog.Warn("destination allowlist is empty — gateway will proxy to ANY destination (set destination_allowlist)")
+	}
+	guarded := AllowDestinations(allowlist, ParseJSONCreds(cfg.Registry(), conditionalMITM))
+	pipeline := PasswordAuth(proxyPassword, guarded)
 
 	return &Server{
 		Pipeline: pipeline,

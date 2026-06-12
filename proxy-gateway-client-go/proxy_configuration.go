@@ -165,8 +165,11 @@ func (b *ProxyConfiguration) MustBuildUsername() string {
 	return u
 }
 
-// BuildURL builds the full proxy URL: http://<username>:x@<host>:<port>.
-// Requires WithProxyClient with a configured proxy endpoint.
+// BuildURL builds the full proxy URL:
+// http://<username>:<PROXY_PASSWORD>@<host>:<port>.
+// Requires WithProxyClient with a configured proxy endpoint. The password is
+// taken from the ProxyClient (seeded from PROXY_PASSWORD; see NewProxyClient)
+// so the gateway's fail-closed PasswordAuth accepts the request (TRA-302).
 func (b *ProxyConfiguration) BuildURL() (string, error) {
 	if b.client == nil {
 		return "", errors.New("proxygatewayclient.ProxyConfiguration: BuildURL requires WithProxyClient")
@@ -180,7 +183,7 @@ func (b *ProxyConfiguration) BuildURL() (string, error) {
 	}
 	u := &url.URL{
 		Scheme: "http",
-		User:   url.UserPassword(username, "x"),
+		User:   url.UserPassword(username, b.client.proxyPassword),
 		Host:   fmt.Sprintf("%s:%d", b.client.proxyHost, b.client.proxyPort),
 	}
 	return u.String(), nil

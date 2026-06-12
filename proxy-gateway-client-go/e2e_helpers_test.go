@@ -128,9 +128,14 @@ proxies_file = %q
 
 	env := os.Environ()
 	env = append(env, "API_KEY=test-api-key")
-	if proxyPassword != "" {
-		env = append(env, "PROXY_PASSWORD="+proxyPassword)
+	// The gateway now FAILS CLOSED when PROXY_PASSWORD is empty (TRA-302), so a
+	// gateway must always be started with a password. Callers that don't care
+	// about auth pass "" and send the default "x" password on their requests
+	// (see the doHTTPConnectToEcho(..., "x") call sites); use "x" here to match.
+	if proxyPassword == "" {
+		proxyPassword = "x"
 	}
+	env = append(env, "PROXY_PASSWORD="+proxyPassword)
 
 	cmd := exec.Command(binPath, cfgFile)
 	cmd.Env = env
@@ -151,8 +156,8 @@ proxies_file = %q
 	})
 
 	cleanup := func() {
-		cmd.Process.Kill()   //nolint:errcheck
-		echoSrv.Close()      //nolint:errcheck
+		cmd.Process.Kill() //nolint:errcheck
+		echoSrv.Close()    //nolint:errcheck
 		for _, s := range upstreamSrvs {
 			s.Close() //nolint:errcheck
 		}
@@ -254,8 +259,8 @@ func upstreamProxyHandler() http.Handler {
 func mustBuildUsername(t *testing.T, set string, minutes int, affinity map[string]any) string {
 	t.Helper()
 	u, err := proxygatewayclient.BuildUsername(proxygatewayclient.UsernameParams{
-		Set:      set,
-		Minutes:  minutes,
+		Set:           set,
+		Minutes:       minutes,
 		SessionParams: affinity,
 	})
 	if err != nil {

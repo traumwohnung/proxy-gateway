@@ -249,12 +249,13 @@ provider = "none"
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	srv, err := BuildServer(cfg, dir, "", nil)
+	srv, err := BuildServer(cfg, dir, "pw", nil)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
 	result, err := srv.Pipeline.Resolve(context.Background(), &proxykit.Request{
 		RawUsername: `{"set":"res","mitm":{"httpcloak":"chrome-latest","scripts":["antibot"]}}`,
+		RawPassword: "pw",
 	})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
@@ -279,9 +280,10 @@ provider = "none"
 `
 	dir, path := writeConfig(t, body)
 	cfg, _ := LoadConfig(path)
-	srv, _ := BuildServer(cfg, dir, "", nil)
+	srv, _ := BuildServer(cfg, dir, "pw", nil)
 	result, err := srv.Pipeline.Resolve(context.Background(), &proxykit.Request{
 		RawUsername: `{"set":"res","mitm":{}}`,
+		RawPassword: "pw",
 	})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
