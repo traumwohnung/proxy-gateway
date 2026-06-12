@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 )
 
@@ -14,16 +15,32 @@ import (
 // proxy URLs, construct http.Client instances, and call the admin API for
 // rotation.
 type ProxyClient struct {
-	proxyHost  string
-	proxyPort  int
-	adminURL   string
-	apiKey     string
-	httpClient *http.Client
+	proxyHost     string
+	proxyPort     int
+	proxyPassword string
+	adminURL      string
+	apiKey        string
+	httpClient    *http.Client
 }
 
 // NewProxyClient returns a fresh ProxyClient. Configure via the fluent
 // setters before use.
-func NewProxyClient() *ProxyClient { return &ProxyClient{} }
+//
+// The proxy password is seeded from the PROXY_PASSWORD environment variable
+// so it matches the gateway's PasswordAuth (TRA-302). The gateway fails
+// closed when its PROXY_PASSWORD is empty, so this must be set in any
+// environment that routes traffic through the gateway. Override per-client
+// via Password().
+func NewProxyClient() *ProxyClient {
+	return &ProxyClient{proxyPassword: os.Getenv("PROXY_PASSWORD")}
+}
+
+// Password sets the proxy password sent in the Proxy-Authorization credentials.
+// Overrides the value seeded from PROXY_PASSWORD at construction.
+func (c *ProxyClient) Password(pw string) *ProxyClient {
+	c.proxyPassword = pw
+	return c
+}
 
 // Proxy sets the proxy endpoint host:port.
 func (c *ProxyClient) Proxy(host string, port int) *ProxyClient {

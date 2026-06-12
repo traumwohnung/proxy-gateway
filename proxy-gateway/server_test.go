@@ -136,14 +136,20 @@ func TestPasswordAuthAcceptsCorrect(t *testing.T) {
 	}
 }
 
-func TestPasswordAuthDisabledWhenEmpty(t *testing.T) {
+// TestPasswordAuthFailsClosedWhenEmpty verifies the TRA-302 fix: an empty
+// configured password must reject every request (fail closed), never wave
+// traffic through. An empty PROXY_PASSWORD turning the gateway into an open
+// forward proxy was the H4 finding.
+func TestPasswordAuthFailsClosedWhenEmpty(t *testing.T) {
 	h := PasswordAuth("", testSource)
-	_, err := h.Resolve(context.Background(), &proxykit.Request{
-		RawUsername: `{"set":"res","minutes":0,"session_params":{}}`,
-		RawPassword: "anything",
-	})
-	if err != nil {
-		t.Fatalf("expected pass-through when no password, got %v", err)
+	for _, pw := range []string{"", "anything"} {
+		_, err := h.Resolve(context.Background(), &proxykit.Request{
+			RawUsername: `{"set":"res","minutes":0,"session_params":{}}`,
+			RawPassword: pw,
+		})
+		if err == nil {
+			t.Fatalf("expected rejection with empty configured password (req pw %q), got nil", pw)
+		}
 	}
 }
 

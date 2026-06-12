@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -311,13 +312,19 @@ func ParseJSONCreds(registry ScriptRegistry, next proxykit.Handler) proxykit.Han
 }
 
 // PasswordAuth is middleware that checks req.RawPassword against a fixed
-// password. If password is empty, all requests pass through.
+// password using a constant-time comparison.
+//
+// FAIL CLOSED: if password is empty (PROXY_PASSWORD unset/empty), every
+// request is rejected. An empty password must never mean "auth disabled" —
+// that turns the gateway into an open forward proxy on the Docker network
+// (egress laundering, internal SSRF, paid-quota burn). See TRA-302 / audit H4.
 func PasswordAuth(password string, next proxykit.Handler) proxykit.Handler {
-	if password == "" {
-		return next
-	}
+	expected := []byte(password)
 	return proxykit.HandlerFunc(func(ctx context.Context, req *proxykit.Request) (*proxykit.Result, error) {
-		if req.RawPassword != password {
+		if len(expected) == 0 {
+			return nil, fmt.Errorf("proxy authentication not configured: set PROXY_PASSWORD")
+		}
+		if subtle.ConstantTimeCompare([]byte(req.RawPassword), expected) != 1 {
 			return nil, fmt.Errorf("invalid credentials")
 		}
 		return next.Resolve(ctx, req)
